@@ -17,5 +17,13 @@ jobs:
         run: |
           curl -sL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz" | tar -xz -C /tmp mcp-publisher
           sudo mv /tmp/mcp-publisher /usr/local/bin/
+      - name: Wait for the package on PyPI (publish-mcp runs in parallel)
+        run: |
+          v=$(python3 -c "import json;print(json.load(open('server.json'))['packages'][0]['version'])")
+          for i in $(seq 1 40); do
+            curl -s https://pypi.org/simple/clousd-mcp/ | grep -q "clousd_mcp-$v-" && { echo "pypi has $v"; exit 0; }
+            sleep 15
+          done
+          echo "clousd-mcp $v not on PyPI after 10 min"; exit 1
       - run: mcp-publisher login github-oidc
       - run: mcp-publisher publish
