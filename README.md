@@ -91,7 +91,9 @@ curl -H "Authorization: Bearer cl_live_..." -H "Content-Type: application/json" 
 | `POST /devices/{name}/start`, `/stop`, `/restart`, `DELETE /devices/{name}` | lifecycle; long operations answer `202` with a job |
 | `GET /devices/{name}/screenshot?w=540` | PNG, or JPEG when a width is given |
 | `GET /devices/{name}/observe?w=540&ui=1` | screenshot plus the UI tree (texts, ids, bounds, clickable), with a sequence number |
-| `POST /devices/{name}/act` | `tap`, `swipe`, `scroll`, `text`, `key`, `open_app`, `close_app`, `url`, `screen_text`, `find_text`, `tap_text`, `wait_text`; `settle` waits for the screen to stop changing, `seq` rejects an action taken on a stale observation |
+| `POST /devices/{name}/act` | `tap`, `long_press`, `swipe`, `scroll`, `text`, `key`, `open_app`, `close_app`, `url`, `intent`, `settings`, `screen_text`, `find_text`, `tap_text`, `wait_text`, `clipboard_set`, `notifications_open` / `_close` / `_clear`; read-only: `notifications`, `clipboard_get`, `app_info`, `crashes`, `health`, `installed`; `settle` waits for the screen to stop changing, `seq` rejects an action taken on a stale observation |
+| `POST /devices/{name}/recipe` | run an app recipe: built-in (`package`, `action`) or your own steps (`recipe`), `async` for a job |
+| `GET`/`POST /devices/{name}/record` | record a recipe from what is done on the phone: `start`, `status`, `stop` (returns the draft) |
 | `GET`/`POST /devices/{name}/network`, `POST …/network/rotate` | which exit the phone uses; switch country or type; new IP |
 | `GET`/`POST`/`DELETE /devices/{name}/adb` | ADB over a relay: one-time code, IP allow-list, expiry |
 | `GET`/`POST /devices/{name}/snapshots`, `POST …/snapshots/{id}/restore`, `…/clone` | saved states: reset between runs, or clone a phone from a state |

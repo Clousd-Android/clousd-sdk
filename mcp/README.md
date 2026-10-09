@@ -47,18 +47,20 @@ carry a key, nothing is read from the environment.
 
 ## Tools
 
-Four tools, on purpose - agents choose better from a few large tools than from a dozen small ones:
+Six tools - a few large tools are easier for a model to choose from than dozens of small ones:
 
 | Tool | What it does |
 |---|---|
 | `devices` | list the phones this key can use; start or stop one |
-| `observe` | the screen as an image plus every text on it |
-| `act` | `tap`, `swipe`, `scroll`, `tap_text`, `wait_text`, `type`, `key`, `open_app`, `close_app`, `open_url`, `installed` |
+| `observe` | the screen as an image with a number drawn on every element, plus the elements as text |
+| `act` | `tap` / `long_press` (element number or point), `swipe`, `scroll`, `tap_text`, `wait_text`, `type`, `key`, `open_app`, `close_app`, `open_url`, `intent`, `settings`, `clipboard_set`, `notifications_open` / `_close` / `_clear`, `installed` |
+| `inspect` | read without touching the screen: `notifications`, `clipboard`, `app` (version, running), `crashes`, `health`, `installed` |
 | `snapshots` | list, save, restore (reset between runs) or clone a phone |
+| `recipe` | run an app recipe (built-in or your own steps); record a new one from what is done on the phone |
 
-Screenshots come back 540 px wide (`CLOUSD_SHOT_WIDTH` to change); `tap` and `swipe` take coordinates in that image
-and the server scales them to the phone. `tap_text` is usually the more reliable way to press a button. Typing works in
-any language.
+Every tool has parameter descriptions, a result schema and hints (read-only, destructive). Screenshots come back 540 px
+wide (`CLOUSD_SHOT_WIDTH` to change); act on an element by its number from the last `observe` - the most reliable way to
+press a button - or give coordinates in that image, which the server scales to the phone. Typing works in any language.
 
 Built on the [`clousd`](../python) Python client. MIT license.
 

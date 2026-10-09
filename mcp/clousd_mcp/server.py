@@ -1,20 +1,28 @@
 """MCP server for CLOUSD cloud phones: gives any MCP-capable agent a real Android phone to look at and act on.
 
-Four tools, on purpose (agents choose better from a few large tools than from a dozen small ones):
+Six tools (a few large tools are easier for a model to choose from than dozens of small ones):
   devices   - list the phones this key can use, start or stop one
-  observe   - the screen as an image plus every text on it
-  act       - tap, swipe, scroll, tap_text, wait_text, type, key, open_app, close_app, open_url, installed
+  observe   - the screen as an image with a number on every element, plus the elements as text
+  act       - tap (by element number or point), long_press, swipe, scroll, type, key, open_app, close_app, open_url,
+              tap_text, wait_text, intent, settings, clipboard_set, notifications_open / _close / _clear
+  inspect   - read without touching the screen: notifications, clipboard, app info, crashes, health, installed apps
   snapshots - list, save, restore (reset between runs) or clone a phone
+  recipe    - run an app recipe (built-in or your own steps) and record new ones from what is done on the phone
 
-Screenshots come back `SHOT_WIDTH` px wide (540: ~1200 px long side on a 1080x2400 phone). tap/swipe take coordinates
-in that screenshot and are scaled to the device here, so the model never converts pixels.
+Screenshots come back `SHOT_WIDTH` px wide (540: ~1200 px long side on a 1080x2400 phone). act takes an element
+number from the last observe, or coordinates in that screenshot; both are converted to the device here.
 
     CLOUSD_API_KEY=cl_live_... clousd-mcp          # stdio server
 """
 from __future__ import annotations
 
+import base64
+import contextvars
+import json
 import os
-from typing import Dict, Optional
+from typing import Annotated, Any, Dict, Optional
+
+from pydantic import Field
 
 from clousd import Clousd, ClousdError
 
@@ -22,18 +30,25 @@ try:   # mcp 2.x: FastMCP became MCPServer
     from mcp.server.mcpserver import Context, Image, MCPServer as _Server
 except ImportError:   # mcp 1.x
     from mcp.server.fastmcp import Context, FastMCP as _Server, Image
+from mcp.types import ToolAnnotations
 
-import base64
-import contextvars
-import json
+try:
+    from clousd.agent import annotate as _annotate, elements_of as _elements_of
+except ImportError:   # clousd < 0.2: plain screenshot, elements numbered here
+    _annotate = None
+    _elements_of = None
 
 SHOT_WIDTH = int(os.environ.get("CLOUSD_SHOT_WIDTH", "540"))
 
-mcp = _Server("clousd", instructions="Real Android phones in the cloud. Call observe before acting; prefer act "
-              "tap_text over coordinates; use snapshots restore to start each run from the same state.")
+mcp = _Server("clousd", instructions="Real Android phones in the cloud. Call observe before acting and act on element "
+              "numbers from it; use inspect to read notifications, app versions or crashes without touching the screen; "
+              "use snapshots restore to start each run from the same state.")
 _clients: Dict[str, Clousd] = {}   # API key → client (one per key; the remote server serves many keys)
 _key: contextvars.ContextVar = contextvars.ContextVar("clousd_key", default="")
-_scale: Dict[str, float] = {}   # device name → device pixels per screenshot pixel
+_scale: Dict[str, float] = {}      # device → device pixels per screenshot pixel
+_els: Dict[str, Dict[str, Any]] = {}   # key+device → {seq, pts:[(cx, cy, label)]} of the last observe
+
+Device_ = Annotated[str, Field(description="Device name from devices (op=list), e.g. dev_04f2")]
 
 
 def _use(ctx: Optional[Context]) -> None:
@@ -74,6 +89,10 @@ def client() -> Clousd:
     return c
 
 
+def _slot(device: str) -> str:
+    return (_key.get() or "env")[-12:] + "/" + device
+
+
 def _jpeg_w(b: bytes) -> int:
     """Width of a JPEG from its SOF marker (the gateway shrinks by an integer factor, so it can differ from the
     requested width: a 720 px screen stays 720 at w=540)."""
@@ -109,58 +128,77 @@ def _px(device: str, v: Optional[float]) -> int:
     return int(round(v * scale))
 
 
-@mcp.tool()
-def devices(op: str = "list", device: str = "", ctx: Optional[Context] = None) -> object:
+def _err(e: Exception) -> str:
+    if isinstance(e, ClousdError):
+        return f"error: {e.message or e.error} ({e.status})"
+    return f"error: {e}"
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Devices", readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
+def devices(op: Annotated[str, Field(description="list (default) | start | stop")] = "list",
+            device: Annotated[str, Field(description="device name, for start/stop")] = "",
+            ctx: Optional[Context] = None) -> Dict[str, Any]:
     """Phones this API key can use.
-    op=list (default): name, state (running / stopped / starting / error), model, Android, network of each phone.
+    op=list: name, state (running / stopped / starting), model, Android version and network exit of each phone.
     op=start / op=stop with `device`: start a stopped phone (waits until it has booted, one to three minutes) or stop
     one (a stopped phone keeps its state and costs nothing)."""
     _use(ctx)
     try:
         if op == "list":
-            return [d.data for d in client().devices()]
+            return {"devices": [d.data for d in client().devices()]}
         if op in ("start", "stop") and device:
             d = client().device(device)
-            return (d.start() if op == "start" else d.stop()).output or "ok"
-        return "error: op is list, start or stop (start/stop need device)"
+            return {"result": (d.start() if op == "start" else d.stop()).output or "ok"}
+        return {"error": "op is list, start or stop (start/stop need device)"}
     except ClousdError as e:
-        return f"error: {e}"
+        return {"error": _err(e)}
 
 
-def _elements(d: dict, scale: float, limit: int = 80) -> str:
-    """Interactive and labelled elements, centres in screenshot pixels: what the model can tap."""
-    rows = []
-    for n in d.get("ui", []):
+def _numbered(o: Dict[str, Any], scale: float) -> tuple:
+    """(lines for the model, [(cx, cy, label)] in device pixels, elements for the image) - one numbering for both"""
+    if _elements_of is not None:
+        els = _elements_of(o)
+        lines, pts = [], []
+        for e in els:
+            cx, cy = e.center
+            lines.append(f"[{e.n}] {e.label!r} ({e.cls}){' ' + e.flags if e.flags else ''} at ({int(cx / scale)}, {int(cy / scale)})")
+            pts.append((cx, cy, e.label))
+        return lines, pts, els
+    lines, pts = [], []
+    for n in o.get("ui", []):
         label = n.get("text") or n.get("desc") or n.get("id", "").split("/")[-1]
         if not label and not n.get("click"):
             continue
         b = n.get("b", [0, 0, 0, 0])
-        cx, cy = int((b[0] + b[2]) / 2 / scale), int((b[1] + b[3]) / 2 / scale)
-        flags = "".join(f for f, k in ((" tap", "click"), (" scroll", "scroll"), (" focused", "focused"), (" off", "disabled")) if n.get(k))
-        rows.append(f"- {label[:60]!r} {n.get('class', '')} at ({cx}, {cy}){flags}")
-        if len(rows) >= limit:
+        cx, cy = (b[0] + b[2]) // 2, (b[1] + b[3]) // 2
+        lines.append(f"[{len(pts)}] {label[:60]!r} {n.get('class', '')} at ({int(cx / scale)}, {int(cy / scale)})")
+        pts.append((cx, cy, label))
+        if len(pts) >= 80:
             break
-    return "\n".join(rows)
+    return lines, pts, None
 
 
-@mcp.tool()
-def observe(device: str, with_text: bool = True, ctx: Optional[Context] = None) -> list:
-    """Look at the phone: a fresh screenshot plus (with_text) the app on screen and its elements with centre
-    coordinates. Give tap/swipe coordinates in this image's pixels."""
+@mcp.tool(annotations=ToolAnnotations(title="Observe the screen", readOnlyHint=True, openWorldHint=False))
+def observe(device: Device_,
+            with_text: Annotated[bool, Field(description="also list the elements (numbered, centres in image pixels)")] = True,
+            numbers: Annotated[bool, Field(description="draw the element numbers on the screenshot")] = True,
+            ctx: Optional[Context] = None) -> list:
+    """Look at the phone: a fresh screenshot, the app on screen and (with_text) every labelled or tappable element with
+    a number. Act on an element by its number (act element=N); coordinates, when needed, are in this image's pixels."""
     _use(ctx)
     d = client().device(device)
     try:
         o = d.observe(width=SHOT_WIDTH, ui=with_text)
     except ClousdError as e:
         if e.status != 404:
-            return [f"error: {e}"]
+            return [_err(e)]
         o = None   # an older gateway without /observe: screenshot + texts the old way
     if o is None:
         try:
             jpeg = d.screenshot(width=SHOT_WIDTH)
             w, h = d.size()
         except ClousdError as e:
-            return [f"error: {e}"]
+            return [_err(e)]
         iw = _jpeg_w(jpeg)
         _scale[device] = w / float(iw)
         note = f"Screen image {iw}x{int(h / _scale[device])} px (phone {w}x{h})."
@@ -173,32 +211,62 @@ def observe(device: str, with_text: bool = True, ctx: Optional[Context] = None) 
     img, scr = o.get("image", {}), o.get("screen", {})
     scale = scr.get("w", 1080) / float(img.get("w") or SHOT_WIDTH)
     _scale[device] = scale
+    jpeg = o["image_bytes"]
     note = f"Screen image {img.get('w')}x{img.get('h')} px (phone {scr.get('w')}x{scr.get('h')}), observation #{o.get('seq')}."
     if o.get("package"):
         note += f"\nOn screen: {o.get('activity') or o.get('package')}"
     if with_text:
         if o.get("ui_error"):
-            note += f"\nElements: unavailable ({o['ui_error']})"
+            note += f"\nElements: unavailable ({o['ui_error']}) - use coordinates from the image"
+            _els.pop(_slot(device), None)
         else:
-            note += "\nElements (centre in image pixels):\n" + _elements(o, scale)
-    return [Image(data=o["image_bytes"], format="jpeg"), note]
+            lines, pts, els = _numbered(o, scale)
+            _els[_slot(device)] = {"seq": o.get("seq"), "pts": pts}
+            note += "\nElements (act element=N):\n" + "\n".join(lines)
+            if numbers and els and _annotate is not None:
+                jpeg = _annotate(jpeg, els, scale)
+    return [Image(data=jpeg, format="jpeg"), note]
 
 
-@mcp.tool()
-def act(device: str, action: str, x: Optional[float] = None, y: Optional[float] = None,
-        x2: Optional[float] = None, y2: Optional[float] = None, text: str = "", ms: int = 300,
-        timeout: int = 30, ctx: Optional[Context] = None) -> str:
-    """Do one thing on the phone, then wait until the screen settles. action is one of:
-    tap (x, y) · swipe (x, y, x2, y2, ms) · scroll (text=down|up) · tap_text (text: tap the element whose text
-    contains it - usually more reliable than coordinates) · wait_text (text, timeout up to 120 s) · type (text into the
-    focused field, any language) · key (text=home|back|recents|enter|tab|del|menu|power|volume_up|volume_down) ·
-    open_app (text=package, e.g. com.android.chrome) · close_app (text=package) · open_url (text=https://…) ·
-    installed (list apps you can open). Coordinates are in the pixels of the last observe image."""
+ACTIONS = ("tap long_press swipe scroll tap_text wait_text type key open_app close_app open_url installed intent settings "
+           "clipboard_set notifications_open notifications_close notifications_clear")
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Act on the phone", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True))
+def act(device: Device_,
+        action: Annotated[str, Field(description="one of: " + ACTIONS)],
+        element: Annotated[Optional[int], Field(description="element number from the last observe (tap, long_press)")] = None,
+        x: Annotated[Optional[float], Field(description="x in screenshot pixels (tap, long_press, swipe start)")] = None,
+        y: Annotated[Optional[float], Field(description="y in screenshot pixels")] = None,
+        x2: Annotated[Optional[float], Field(description="swipe end x")] = None,
+        y2: Annotated[Optional[float], Field(description="swipe end y")] = None,
+        text: Annotated[str, Field(description="type: the text; key: home|back|recents|enter|tab|del|menu; scroll: down|up; "
+                                                "open_app/close_app: package; open_url: https://...; tap_text/wait_text: text on screen; "
+                                                "settings: wifi|bluetooth|display|sound|apps|location|about|battery|...; "
+                                                "intent: a URI to view (geo:, tel:, https:...) or JSON {action,data,package,component,extras}; "
+                                                "clipboard_set: the text")] = "",
+        ms: Annotated[int, Field(description="swipe / long_press duration in ms")] = 300,
+        timeout: Annotated[int, Field(description="wait_text: seconds to wait, up to 120")] = 30,
+        ctx: Optional[Context] = None) -> str:
+    """Do one thing on the phone, then wait until the screen settles. Prefer element numbers from observe over
+    coordinates; tap_text taps the element whose text contains `text`. Typing goes into the focused field (tap it
+    first) and works in any language. Returns what happened; "the screen did not change" means the action probably
+    missed - observe again."""
     _use(ctx)
     d = client().device(device)
     try:
-        if action == "tap":
+        if action in ("tap", "long_press") and element is not None:
+            last = _els.get(_slot(device))
+            if not last or not 0 <= element < len(last["pts"]):
+                return "error: no such element - call observe first and use a number from its list"
+            cx, cy, _label = last["pts"][element]
+            body: Dict[str, Any] = {"op": action, "x": cx, "y": cy}
+            if action == "long_press":
+                body["ms"] = max(ms, 600)
+        elif action == "tap":
             body = {"op": "tap", "x": _px(device, x), "y": _px(device, y)}
+        elif action == "long_press":
+            body = {"op": "long_press", "x": _px(device, x), "y": _px(device, y), "ms": max(ms, 600)}
         elif action == "swipe":
             body = {"op": "swipe", "x": _px(device, x), "y": _px(device, y), "x2": _px(device, x2), "y2": _px(device, y2), "ms": ms}
         elif action == "scroll":
@@ -217,8 +285,18 @@ def act(device: str, action: str, x: Optional[float] = None, y: Optional[float] 
             body = {"op": "url", "url": text}
         elif action == "installed":
             return ", ".join(d.installed())
+        elif action == "settings":
+            body = {"op": "settings", "text": text}
+        elif action == "intent":
+            t = text.strip()
+            it = json.loads(t) if t.startswith("{") else {"action": "android.intent.action.VIEW", "data": t}
+            body = {"op": "intent", "intent": it}
+        elif action == "clipboard_set":
+            body = {"op": "clipboard_set", "text": text}
+        elif action in ("notifications_open", "notifications_close", "notifications_clear"):
+            body = {"op": action}
         else:
-            return "error: unknown action - see the tool description"
+            return "error: unknown action - one of " + ACTIONS
         op = body.pop("op")
         try:
             r = d.act(op, settle=True, **body)
@@ -231,29 +309,99 @@ def act(device: str, action: str, x: Optional[float] = None, y: Optional[float] 
                 raise
             return d.action(op, **body).get("output") or "ok"   # older gateway without /act
     except (ClousdError, ValueError) as e:
-        return f"error: {e}"
+        return _err(e)
 
 
-@mcp.tool()
-def snapshots(device: str, op: str = "list", snapshot_id: str = "", new_name: str = "", ctx: Optional[Context] = None) -> object:
+@mcp.tool(annotations=ToolAnnotations(title="Inspect the phone", readOnlyHint=True, openWorldHint=False))
+def inspect(device: Device_,
+            what: Annotated[str, Field(description="notifications | clipboard | app | crashes | health | installed")],
+            package: Annotated[str, Field(description="app: the package to describe; crashes: only this package")] = "",
+            ctx: Optional[Context] = None) -> Dict[str, Any]:
+    """Read the phone without touching the screen.
+    notifications: the shade as a list (app, title, text, time). clipboard: the clipboard text.
+    app: installed version, install/update time, installer, whether it runs or is on screen.
+    crashes: recent app crashes, native crashes and ANRs with the first lines of the stack.
+    health: running, booted, network exit and the latest automatic check of the phone.
+    installed: packages of apps that can be opened."""
+    _use(ctx)
+    d = client().device(device)
+    try:
+        if what == "notifications":
+            return {"notifications": d.notifications()}
+        if what == "clipboard":
+            return {"text": d.clipboard_get()}
+        if what == "app":
+            if not package:
+                return {"error": "app needs package"}
+            return {"app": d.app_info(package)}
+        if what == "crashes":
+            return {"crashes": d.crashes(package)}
+        if what == "health":
+            return {"health": d.health()}
+        if what == "installed":
+            return {"packages": d.installed()}
+        return {"error": "what is notifications, clipboard, app, crashes, health or installed"}
+    except ClousdError as e:
+        return {"error": _err(e)}
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Snapshots", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
+def snapshots(device: Device_,
+              op: Annotated[str, Field(description="list (default) | save | restore | clone")] = "list",
+              snapshot_id: Annotated[str, Field(description="restore / clone: id from op=list")] = "",
+              new_name: Annotated[str, Field(description="clone: name of the new phone (letters and digits, up to 16)")] = "",
+              ctx: Optional[Context] = None) -> Dict[str, Any]:
     """Saved states of a phone, for starting every run from the same point.
-    op=list (default): id, created, android, current, restorable.
-    op=save: save the current state. op=restore with snapshot_id: reset the phone to that state.
-    op=clone with snapshot_id and new_name (letters and digits, up to 16): a new phone from that state."""
+    op=list: id, created, android, current, restorable. op=save: save the current state.
+    op=restore with snapshot_id: reset the phone to that state (what happened since is lost).
+    op=clone with snapshot_id and new_name: a new phone from that state."""
     _use(ctx)
     d = client().device(device)
     try:
         if op == "list":
-            return d.snapshots()
+            return {"snapshots": d.snapshots()}
         if op == "save":
-            return d.save_snapshot().output or "saved"
+            return {"result": d.save_snapshot().output or "saved"}
         if op == "restore" and snapshot_id:
-            return d.restore(snapshot_id).output or "restored"
+            return {"result": d.restore(snapshot_id).output or "restored"}
         if op == "clone" and snapshot_id and new_name:
-            return "created " + d.clone(snapshot_id, new_name).name
-        return "error: op is list, save, restore (snapshot_id) or clone (snapshot_id, new_name)"
+            return {"result": "created " + d.clone(snapshot_id, new_name).name, "device": new_name}
+        return {"error": "op is list, save, restore (snapshot_id) or clone (snapshot_id, new_name)"}
     except ClousdError as e:
-        return f"error: {e}"
+        return {"error": _err(e)}
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Recipes", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True))
+def recipe(device: Device_,
+           op: Annotated[str, Field(description="run | record_start | record_status | record_stop")],
+           package: Annotated[str, Field(description="run: app package of a built-in recipe (e.g. com.instagram.android)")] = "",
+           action: Annotated[str, Field(description="run: built-in recipe name (e.g. warm, login, publish_post)")] = "",
+           steps: Annotated[str, Field(description="run: your own recipe as JSON {app, steps:[...]} (e.g. a recorded draft)")] = "",
+           vars: Annotated[str, Field(description='run: variables as JSON, e.g. {"seconds": "300"}')] = "",
+           ctx: Optional[Context] = None) -> Dict[str, Any]:
+    """App recipes: scripted flows that wait for the right screen at each step, deal with popups and report what they
+    did. op=run runs a built-in recipe (package + action) or your own JSON and returns when it is finished.
+    op=record_start begins recording what is done on the phone (through act, or by a person in the live view);
+    record_status shows progress; record_stop returns the recorded draft recipe, ready for op=run."""
+    _use(ctx)
+    d = client().device(device)
+    try:
+        if op == "run":
+            v = json.loads(vars) if vars.strip() else {}
+            if steps.strip():
+                return {"result": d.recipe(recipe=json.loads(steps), vars=v)}
+            if package and action:
+                return {"result": d.recipe(package, action, vars=v)}
+            return {"error": "run needs package + action, or steps"}
+        if op == "record_start":
+            return d.record_start()
+        if op == "record_status":
+            return d.record_status()
+        if op == "record_stop":
+            return d.record_stop()
+        return {"error": "op is run, record_start, record_status or record_stop"}
+    except (ClousdError, ValueError) as e:
+        return {"error": _err(e)}
 
 
 def main() -> None:

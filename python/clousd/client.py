@@ -42,7 +42,7 @@ class Clousd:
         self.base_url = (base_url or os.environ.get("CLOUSD_API_URL") or DEFAULT_URL).rstrip("/")
         self.timeout = timeout
         self._http = requests.Session()
-        self._http.headers.update({"Authorization": "Bearer " + self.api_key, "User-Agent": "clousd-python/0.1"})
+        self._http.headers.update({"Authorization": "Bearer " + self.api_key, "User-Agent": "clousd-python/0.2"})
 
     # -- transport ---------------------------------------------------------------------------------------------
     def request(self, method: str, path: str, json: Any = None, params: Any = None,
@@ -312,6 +312,98 @@ class Device:
     def adb_enable(self, allow_ips: List[str], ttl_hours: int = 24) -> Dict[str, Any]:
         """Enable ADB access to the device for these IPs/CIDRs (also unlocks shell/push); returns host, port, code."""
         return self.client.request("POST", self._p("adb"), json={"ttl_hours": ttl_hours, "allow_ips": allow_ips})
+
+    # -- small tools: long press, clipboard, notifications, intents, app info, crashes, health ------------------
+    def _data(self, op: str, **kw: Any) -> Any:
+        r = self.action(op, **kw)
+        return r.get("data", r.get("output"))
+
+    def long_press(self, x: int, y: int, ms: int = 800) -> str:
+        """Press and hold at a point (device pixels), 400-5000 ms: context menus, text selection, drag handles."""
+        return self.action("long_press", x=int(x), y=int(y), ms=int(ms)).get("output", "")
+
+    def clipboard_get(self) -> str:
+        """Text on the phone's clipboard."""
+        d = self._data("clipboard_get")
+        return d.get("text", "") if isinstance(d, dict) else str(d or "")
+
+    def clipboard_set(self, text: str) -> str:
+        """Put text on the phone's clipboard (without pasting it)."""
+        return self.action("clipboard_set", text=text).get("output", "")
+
+    def notifications(self) -> List[Dict[str, Any]]:
+        """Notifications in the shade: pkg, title, text, key, when. Does not open the shade."""
+        d = self._data("notifications")
+        return d if isinstance(d, list) else []
+
+    def notifications_open(self) -> str:
+        return self.action("notifications_open").get("output", "")
+
+    def notifications_close(self) -> str:
+        return self.action("notifications_close").get("output", "")
+
+    def notifications_clear(self) -> str:
+        """Open the shade and press "Clear all"."""
+        return self.action("notifications_clear").get("output", "")
+
+    def intent(self, action: str = "", data: str = "", package: str = "", component: str = "", type: str = "",
+               extras: Optional[Dict[str, str]] = None) -> str:
+        """Start an activity with an intent, like `am start`: intent("android.intent.action.VIEW", "geo:0,0?q=coffee"),
+        or component="com.android.settings/.Settings". `extras` are string extras."""
+        it: Dict[str, Any] = {k: v for k, v in dict(action=action, data=data, package=package, component=component, type=type).items() if v}
+        if extras:
+            it["extras"] = extras
+        return self.action("intent", intent=it).get("output", "")
+
+    def settings(self, page: str) -> str:
+        """Open a settings page: wifi, bluetooth, display, sound, apps, location, security, date, language, about,
+        battery, storage, accessibility, notifications, network, airplane, nfc, developer, accounts, privacy, main -
+        or any android.settings.* action."""
+        return self.action("settings", text=page).get("output", "")
+
+    def app_info(self, package: str) -> Dict[str, Any]:
+        """Installed version, version code, install/update time, installer, running, foreground."""
+        d = self._data("app_info", package=package)
+        return d if isinstance(d, dict) else {}
+
+    def crashes(self, package: str = "") -> List[Dict[str, Any]]:
+        """Recent app crashes, native crashes and ANRs (optionally of one package): kind, process, when, summary, trace."""
+        d = self._data("crashes", package=package) if package else self._data("crashes")
+        return d if isinstance(d, list) else []
+
+    def health(self) -> Dict[str, Any]:
+        """running, booted, network (type, country, ip, ok) and the latest automatic check (verdict, findings)."""
+        d = self._data("health")
+        return d if isinstance(d, dict) else {}
+
+    # -- recipes: app scenarios as data, and recording them from the live screen --------------------------------
+    def recipe(self, package: str = "", action: str = "", recipe: Optional[Dict[str, Any]] = None,
+               vars: Optional[Dict[str, str]] = None, wait: bool = True, timeout: float = 1800) -> Any:
+        """Run a recipe: a built-in one (package + action, e.g. "warm") or your own `recipe` dict {app, steps}
+        (a recorded draft). Returns the result text; with wait=False a Job."""
+        body: Dict[str, Any] = {"vars": vars or {}}
+        if recipe is not None:
+            body["recipe"] = recipe
+            if package:
+                body["package"] = package
+        else:
+            body.update(package=package, action=action)
+        if not wait:
+            body["async"] = True
+            return self.client._job(self.client.request("POST", self._p("recipe"), json=body), False, timeout)
+        return self.client.request("POST", self._p("recipe"), json=body, timeout=timeout).get("output", "")
+
+    def record_start(self) -> Dict[str, Any]:
+        """Start recording: what is done on this phone (live view, API) becomes recipe steps."""
+        return self.client.request("POST", self._p("record"), json={"op": "start"})
+
+    def record_status(self) -> Dict[str, Any]:
+        """{active, count, events, tree_ready}: wait for tree_ready before the next tap to get an exact selector."""
+        return self.client.request("GET", self._p("record"))
+
+    def record_stop(self, save: bool = True) -> Dict[str, Any]:
+        """Stop recording: {recipe: the draft, file}. Run the draft with recipe(recipe=...)."""
+        return self.client.request("POST", self._p("record"), json={"op": "stop", "save": save})
 
     # -- state between runs ------------------------------------------------------------------------------------
     def snapshots(self) -> List[Dict[str, Any]]:

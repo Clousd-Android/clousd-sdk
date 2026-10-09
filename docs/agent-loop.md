@@ -27,6 +27,34 @@ while not done(obs):
     obs = phone.observe(width=540)
 ```
 
+## A ready-made loop
+
+`clousd.agent` is this loop with a language model as the policy: any OpenAI-compatible chat endpoint (llama.cpp,
+vLLM, Ollama or a hosted API). Each step the model gets the screenshot with a number drawn on every labelled or
+tappable element, the same elements as text lines (`[12] 'About phone' (TextView) tap`) and the steps so far, and
+answers with one tool call: `tap {element: 12}`, `type`, `key`, `scroll`, `swipe`, `open_app`, `open_url`,
+`wait`, `done`, `fail`.
+
+```bash
+clousd run "Open Settings and tell me which Android version this phone runs" \
+    --device dev_04f2 --model-url http://127.0.0.1:8080/v1 --trace run.jsonl
+```
+
+Guards that came out of watching an open-weights 27B vision model drive phones:
+
+- **Typing with nothing focused** is refused with "tap the field first (for web addresses use open_url)". Models
+  like to type a URL into whatever screen is open.
+- **Waiting** is allowed twice in a row; the third wait is refused. Without that a model can wait on a static screen
+  until it runs out of steps.
+- **Repeating** the same call three times adds "it is not working, try something different" to the result the model
+  sees next.
+- **409 stale** is not an error: the loop just looks again.
+
+`clousd bench` runs a dozen everyday tasks (Settings questions, a web page heading, a Chrome search, dark theme,
+a contact, an alarm, brightness) with automatic checks - from the answer, the final screen, or, when ADB access is
+enabled for the device, the phone's own state (`settings get`, content providers). It is a quick way to compare models
+or prompts on the same phone.
+
 ## Give the model text, not only pixels
 
 A screenshot alone makes the model guess coordinates. The UI tree gives it the texts and the bounds of every

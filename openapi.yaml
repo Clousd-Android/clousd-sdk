@@ -119,6 +119,46 @@ paths:
         "409":
           description: The screen changed since the observation `seq` came from (another observe or act); nothing was done
           content: { application/json: { schema: { type: object, properties: { error: { type: string, const: stale }, message: { type: string }, seq: { type: integer } } } } }
+  /devices/{name}/recipe:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post:
+      summary: Run an app recipe - a built-in one, or your own steps (for example a recorded draft)
+      description: >-
+        Recipes are app scenarios as data: steps wait for the right screen, tap elements by resource-id or text, type, scroll,
+        branch on what is on screen, and report what they did. Built-in: {package, action} (warm, login, publish_post, ...).
+        Your own: {recipe: {app, steps}}. Steps may refer to named elements of the app pack (`{"el": "like_button"}`) and carry
+        `expect` (wait for an element before the step), `check` (wait for an element after it) and `undo` (steps when the check fails).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                package: { type: string }
+                action: { type: string }
+                recipe: { type: object, properties: { app: { type: string }, steps: { type: array, items: { type: object } } } }
+                vars: { type: object, additionalProperties: { type: string } }
+                async: { type: boolean, description: answer 202 with a job instead of waiting }
+      responses:
+        "200": { description: Finished, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, output: { type: string, description: the result and the trace of what was done } } } } } }
+        "202": { description: Started (async), content: { application/json: { schema: { type: object, properties: { job: { $ref: "#/components/schemas/Job" } } } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /devices/{name}/record:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    get:
+      summary: Recording status - {active, count, events, tree_ready}
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+    post:
+      summary: Record a recipe from what is done on the phone (live view or API)
+      description: >-
+        op=start begins; every tap, long press, swipe, scroll, key and typed text becomes a step with the element under the
+        finger (resource-id, then text, then screen fractions). Wait for tree_ready before the next tap for an exact selector.
+        op=stop returns the draft recipe (typed passwords and logins become {{password}} / {{login}}); op=cancel drops it.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [op], properties: { op: { type: string, enum: [start, stop, cancel, status] }, save: { type: boolean, default: true } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, recipe: { type: object }, file: { type: string } } } } } }
   /devices/{name}/op:
     parameters: [{ $ref: "#/components/parameters/name" }]
     post:
@@ -265,7 +305,13 @@ components:
       type: object
       required: [op]
       properties:
-        op: { type: string, enum: [tap, swipe, scroll, text, key, open_app, close_app, url, screen_text, find_text, tap_text, wait_text, installed] }
+        op:
+          type: string
+          enum: [tap, long_press, swipe, scroll, text, key, open_app, close_app, url, intent, settings, screen_text, find_text, tap_text, wait_text,
+                 installed, clipboard_get, clipboard_set, notifications, notifications_open, notifications_close, notifications_clear, app_info, crashes, health]
+          description: >-
+            Read-only ops (installed, screen_text, find_text, wait_text, clipboard_get, notifications, app_info, crashes, health) do not
+            change the observation seq. clipboard_get, notifications, app_info, crashes and health return their result as JSON in `data`.
         x: { type: integer, description: phone pixels }
         y: { type: integer }
         x2: { type: integer }
@@ -275,6 +321,18 @@ components:
         key: { type: string, description: "home, back, recents, enter, power, tab, del, menu, volume_up, volume_down, wake, sleep or a keycode" }
         package: { type: string }
         url: { type: string }
+        fx: { type: number, description: "x as a fraction of the screen width (0..1) instead of pixels (tap, swipe, long_press)" }
+        fy: { type: number }
+        intent:
+          type: object
+          description: for op=intent - started like `am start` from the shell user
+          properties:
+            action: { type: string, example: "android.intent.action.VIEW" }
+            data: { type: string, description: "a URI, e.g. https://example.com or geo:0,0?q=coffee" }
+            package: { type: string }
+            component: { type: string, example: "com.android.settings/.Settings" }
+            type: { type: string, description: MIME type }
+            extras: { type: object, additionalProperties: { type: string }, description: string extras }
     UINode:
       type: object
       properties:

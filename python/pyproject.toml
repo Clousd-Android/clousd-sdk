@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clousd"
-version = "0.1.0"
+version = "0.2.0"
 description = "Cloud Android phones modelled on real devices: API client for scripts and AI agents"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -16,6 +16,12 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+
+[project.optional-dependencies]
+image = ["pillow>=9"]
+
+[project.scripts]
+clousd = "clousd.cli:main"
 
 [project.urls]
 Homepage = "https://clousd.com/agents/"
