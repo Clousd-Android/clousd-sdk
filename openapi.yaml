@@ -1,0 +1,307 @@
+openapi: 3.1.0
+info:
+  title: CLOUSD API
+  version: "1.0"
+  description: >
+    Cloud Android phones modelled on real devices. Every call needs `Authorization: Bearer cl_live_…`
+    (dashboard → Settings → API keys; scope read or control). Limits: 120 requests a minute per key and device for
+    /devices/{name}/… routes (600 a minute per key across devices), 60 a minute per key for the rest (429 + Retry-After). Long operations answer 202 with a
+    job; poll /jobs/{id}. Errors are JSON: {"error": "...", "message": "..."}.
+servers:
+  - url: https://api.clousd.com/v1
+security:
+  - bearer: []
+paths:
+  /devices:
+    get:
+      summary: Devices this key can see
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { devices: { type: array, items: { $ref: "#/components/schemas/Device" } } } } } } }
+    post:
+      summary: Create a device (charged to the account of the API key)
+      description: >
+        One device per call. The account is charged as in the dashboard (creation fee, plus the first month for plan
+        monthly); a paid network exit (mobile, residential, isp, datacenter) is metered per GB. Idempotency-Key (header, or
+        idempotency_key / name in the body) is required - a retry with the same key within 10 minutes returns the same
+        answer and is not charged twice. The device boots in one to three minutes: poll GET /devices/{name}.
+      parameters: [{ name: Idempotency-Key, in: header, required: false, schema: { type: string, maxLength: 120 } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile]
+              properties:
+                profile: { type: string, description: model id from GET /models }
+                network: { type: object, properties: { type: { type: string, enum: [off, byo, mobile, residential, isp, datacenter] }, country: { type: string, description: ISO-2 for paid exits }, url: { type: string, description: "socks5:// or http:// for byo" } } }
+                plan: { type: string, enum: [metered, monthly], default: metered }
+                region: { type: string, description: where the device itself runs (ISO-2); default - the exit country }
+                burner: { type: boolean, description: disposable - stopping deletes it }
+                idempotency_key: { type: string }
+      responses:
+        "202": { description: Creating, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, name: { type: string }, ext_id: { type: string }, state: { type: string, const: starting }, poll: { type: string }, charged_cents: { type: integer }, android: { type: string } } } } } }
+        "400": { description: bad_profile | bad_network | bad_request, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "402": { description: insufficient_funds - add funds in the dashboard, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: only account API keys can create devices }
+        "409": { description: limit (50 devices per account) | processing (same Idempotency-Key still running) }
+        "502": { description: the device service did not answer - nothing was charged }
+  /devices/{name}:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    get:
+      summary: One device
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { device: { $ref: "#/components/schemas/Device" } } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /devices/{name}/start:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post: { summary: Start the device, responses: { "202": { $ref: "#/components/responses/Job" } } }
+  /devices/{name}/stop:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post: { summary: Stop the device (state is kept; a stopped device costs nothing), responses: { "202": { $ref: "#/components/responses/Job" } } }
+  /devices/{name}/restart:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post: { summary: Restart the device, responses: { "202": { $ref: "#/components/responses/Job" } } }
+  /devices/{name}/screenshot:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    get:
+      summary: Screen as PNG; with w a smaller JPEG (cached up to 10 s - use /observe for a fresh frame)
+      parameters: [{ name: w, in: query, schema: { type: integer, minimum: 40, maximum: 540 } }]
+      responses:
+        "200": { description: Image, content: { image/png: {}, image/jpeg: {} } }
+  /devices/{name}/observe:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    get:
+      summary: A fresh look at the phone - screenshot, UI tree and the app on screen in one call
+      parameters:
+        - { name: w, in: query, description: image width in px (160-1080, default 540), schema: { type: integer } }
+        - { name: ui, in: query, description: 0 to skip the UI tree (faster), schema: { type: integer, enum: [0, 1] } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Observation" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /devices/{name}/action:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post:
+      summary: One action on the phone (no waiting)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Action" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, output: { type: string }, texts: { type: array, items: { type: string } }, packages: { type: array, items: { type: string } } } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /devices/{name}/act:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post:
+      summary: One action, then wait until the screen stops changing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/Action"
+                - type: object
+                  properties:
+                    settle: { type: boolean, description: wait for two identical frames in a row (up to 5 s) }
+                    seq: { type: integer, description: seq of the observation this action is based on }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  output: { type: string }
+                  seq: { type: integer, description: screen state after this action (pass it to the next act to chain without observing) }
+                  settled: { type: boolean, description: two identical frames that differ from the frame before the action, or no change for 3 s }
+                  changed: { type: boolean, description: false - the screen did not change at all (the action probably missed) }
+                  waited_ms: { type: integer }
+        "409":
+          description: The screen changed since the observation `seq` came from (another observe or act); nothing was done
+          content: { application/json: { schema: { type: object, properties: { error: { type: string, const: stale }, message: { type: string }, seq: { type: integer } } } } }
+  /devices/{name}/op:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post:
+      summary: One core primitive (the Lusiesta core protocol, one to one)
+      description: >
+        op and args as in core/protocol.py; data has the protocol's result shape. shell {argv, timeout} → {rc, out_b64,
+        err_b64} runs argv as the phone's shell user and, like push, needs ADB access enabled for the device with the
+        caller's IP in allow_ips (403 otherwise; the key replaces the relay's login code); at most 4 shell/push at a time
+        per device (409 busy); commands that would reboot the device are refused; every command is logged. dump → {xml_z}; launch_app {package, activity},
+        start_activity {component}, force_stop {package} → {rc}; foreground → {package}; screenshot → {png_b64}; acquire,
+        screen → {w, h}; release, tap {x, y}, long_press {x, y, ms}, swipe {x1, y1, x2, y2, ms}, key {code, meta}, text
+        {value} (any language), clear_field → {}; ip_check → {ok, rotated, has_link, ip, country, city, timezone,
+        current_time, error}.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [op], properties: { op: { type: string, enum: [shell, dump, launch_app, start_activity, force_stop, foreground, screenshot, acquire, release, tap, long_press, swipe, key, text, clear_field, screen, ip_check] }, args: { type: object } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, data: { type: object } } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+  /devices/{name}/files:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    put:
+      summary: Put a file on the phone (push) - body is the file, path under /sdcard/ or /data/local/tmp/
+      parameters: [{ name: path, in: query, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, data: { type: object, properties: { rc: { type: integer }, err: { type: string }, bytes: { type: integer } } } } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+  /devices/{name}/media:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post:
+      summary: Media from the library on the phone as if shot with it (push), remove what we put (clean), or list it
+      description: push writes the file to /sdcard/<dir>/ under a gallery-style name of the phone's brand, re-encoded for this phone (EXIF make/model, capture time in the exit time zone, exit-city GPS when geo is true) and registers it in MediaStore. Media is uploaded from the dashboard (POST /api/media/upload) and referenced by id and owner.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [action], properties: { action: { type: string, enum: [push, clean, list] }, id: { type: string }, owner: { type: string }, geo: { type: boolean, default: true }, unique: { type: boolean, default: true }, dir: { type: string, default: DCIM/Camera } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, path: { type: string }, name: { type: string }, kind: { type: string }, unique: { type: boolean }, geo: { type: boolean }, taken_at: { type: string }, make: { type: string }, model: { type: string }, removed: { type: integer }, pushed: { type: array, items: { type: object } } } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /devices/{name}/snapshots:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    get:
+      summary: Saved states of the device
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { snapshots: { type: array, items: { $ref: "#/components/schemas/Snapshot" } } } } } } }
+    post: { summary: Save the current state, responses: { "202": { $ref: "#/components/responses/Job" } } }
+  /devices/{name}/snapshots/{id}/restore:
+    parameters: [{ $ref: "#/components/parameters/name" }, { name: id, in: path, required: true, schema: { type: string } }]
+    post: { summary: Reset the device to a saved state, responses: { "202": { $ref: "#/components/responses/Job" } } }
+  /devices/{name}/snapshots/{id}/clone:
+    parameters: [{ $ref: "#/components/parameters/name" }, { name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: A new device from a saved state
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, pattern: "^[a-z0-9]{1,16}$" } } } } } }
+      responses: { "202": { $ref: "#/components/responses/Job" } }
+  /devices/{name}/worlds:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    get:
+      summary: Worlds of the device (frozen /data states it was taken from or is running on)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { worlds: { type: array, items: { type: object, properties: { world: { type: string }, from: { type: string }, profile: { type: string }, android: { type: string }, size: { type: integer }, created: { type: string }, image: { type: string }, devices: { type: array, items: { type: string } } } } } } } } } }
+    post:
+      summary: Freeze the device state as a world (the device is stopped while the world is taken and stays stopped)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, pattern: "^[a-z0-9_-]{1,32}$" } } } } } }
+      responses: { "202": { $ref: "#/components/responses/Job" }, "400": { $ref: "#/components/responses/Error" } }
+  /devices/{name}/worlds/{world}:
+    parameters: [{ $ref: "#/components/parameters/name" }, { name: world, in: path, required: true, schema: { type: string } }]
+    delete: { summary: Delete a world (409 while a device uses it), responses: { "200": { description: OK }, "409": { $ref: "#/components/responses/Error" } } }
+  /devices/{name}/worlds/{world}/reset:
+    parameters: [{ $ref: "#/components/parameters/name" }, { name: world, in: path, required: true, schema: { type: string } }]
+    post: { summary: Reset the device to the world (seconds on disk, then a normal boot; same identity), responses: { "202": { $ref: "#/components/responses/Job" } } }
+  /devices/{name}/worlds/{world}/fork:
+    parameters: [{ $ref: "#/components/parameters/name" }, { name: world, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: New devices from the world (own identity each, shared /data, no image copy)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [prefix], properties: { prefix: { type: string, pattern: "^[a-z0-9]{1,12}$" }, count: { type: integer, minimum: 1, maximum: 20, default: 1 } } } } } }
+      responses: { "202": { description: Accepted, content: { application/json: { schema: { type: object, properties: { job: { type: object }, world: { type: string }, devices: { type: array, items: { type: string } } } } } } }, "409": { $ref: "#/components/responses/Error" } }
+  /devices/{name}/logs:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    get:
+      summary: Recent logcat lines
+      parameters: [{ name: lines, in: query, schema: { type: integer, maximum: 2000 } }]
+      responses: { "200": { description: OK } }
+  /devices/{name}/adb:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    get: { summary: ADB session status, responses: { "200": { description: OK } } }
+    post: { summary: Open an ADB session through the relay (code, IP allowlist, time limit), responses: { "200": { description: OK } } }
+    delete: { summary: Close the ADB session, responses: { "200": { description: OK } } }
+  /network/options:
+    get:
+      summary: What can be chosen when creating a device right now - exit types on sale, countries, plans (cached 60 s)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { types: { type: array, items: { type: string } }, countries: { type: array, items: { type: object, properties: { code: { type: string }, name: { type: string } } } }, plans: { type: array, items: { type: string } }, updated: { type: string, format: date-time } } } } } }
+  /jobs/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    get:
+      summary: State of a long operation
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { job: { $ref: "#/components/schemas/Job" } } } } } }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+  parameters:
+    name: { name: name, in: path, required: true, schema: { type: string } }
+  responses:
+    Error:
+      description: Error
+      content: { application/json: { schema: { type: object, properties: { error: { type: string }, message: { type: string } } } } }
+    Job:
+      description: Started
+      content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, job: { $ref: "#/components/schemas/Job" } } } } }
+  schemas:
+    Error:
+      type: object
+      properties:
+        ok: { type: boolean, const: false }
+        error: { type: string }
+        message: { type: string }
+    Device:
+      type: object
+      properties:
+        name: { type: string }
+        state: { type: string, enum: [running, stopped, starting, error] }
+    Job:
+      type: object
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        phone: { type: string }
+        state: { type: string, enum: [running, done, failed] }
+        started: { type: string, format: date-time }
+        done: { type: string, format: date-time }
+        output: { type: string }
+    Snapshot:
+      type: object
+      properties:
+        id: { type: string }
+        created: { type: string }
+        android: { type: string }
+        current: { type: boolean }
+        restorable: { type: boolean }
+    Action:
+      type: object
+      required: [op]
+      properties:
+        op: { type: string, enum: [tap, swipe, scroll, text, key, open_app, close_app, url, screen_text, find_text, tap_text, wait_text, installed] }
+        x: { type: integer, description: phone pixels }
+        y: { type: integer }
+        x2: { type: integer }
+        y2: { type: integer }
+        ms: { type: integer, description: swipe duration; for wait_text the timeout in ms (max 120000) }
+        text: { type: string, description: "text to type (any language), text to find, scroll direction (down|up)" }
+        key: { type: string, description: "home, back, recents, enter, power, tab, del, menu, volume_up, volume_down, wake, sleep or a keycode" }
+        package: { type: string }
+        url: { type: string }
+    UINode:
+      type: object
+      properties:
+        text: { type: string }
+        desc: { type: string }
+        id: { type: string }
+        class: { type: string }
+        pkg: { type: string }
+        b: { type: array, items: { type: integer }, minItems: 4, maxItems: 4, description: "x1, y1, x2, y2 in phone pixels" }
+        click: { type: boolean }
+        long: { type: boolean }
+        scroll: { type: boolean }
+        focus: { type: boolean }
+        focused: { type: boolean }
+        checked: { type: boolean }
+        disabled: { type: boolean }
+        password: { type: boolean }
+        selected: { type: boolean }
+    Observation:
+      type: object
+      properties:
+        seq: { type: integer }
+        ts: { type: string, format: date-time }
+        ms: { type: integer, description: time the observation took }
+        screen: { type: object, properties: { w: { type: integer }, h: { type: integer } } }
+        image: { type: object, properties: { w: { type: integer }, h: { type: integer }, format: { type: string }, data: { type: string, contentEncoding: base64 } } }
+        package: { type: string }
+        activity: { type: string }
+        ui: { type: array, items: { $ref: "#/components/schemas/UINode" } }
+        ui_error: { type: string, description: "set when the UI tree is not available yet (prefix not_ready)" }
