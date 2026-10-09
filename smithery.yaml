@@ -1,0 +1,12 @@
+# Smithery (smithery.ai) listing: local stdio server, one secret.
+startCommand:
+  type: stdio
+  configSchema:
+    type: object
+    required: [clousdApiKey]
+    properties:
+      clousdApiKey:
+        type: string
+        description: Clousd API key (cl_live_...) from the dashboard, Settings -> API keys
+  commandFunction: |-
+    (config) => ({ command: "clousd-mcp", args: [], env: { CLOUSD_API_KEY: config.clousdApiKey } })

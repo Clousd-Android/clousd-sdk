@@ -42,3 +42,5 @@ and the server scales them to the phone. `tap_text` is usually the more reliable
 any language.
 
 Built on the [`clousd`](../python) Python client. MIT license.
+
+mcp-name: io.github.Clousd-Android/clousd-mcp

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.Clousd-Android/clousd-mcp",
+  "description": "A real Android phone in the cloud for any MCP agent: observe the screen, act on it, reset to a saved state between runs.",
+  "repository": { "url": "https://github.com/Clousd-Android/clousd-sdk", "source": "github" },
+  "websiteUrl": "https://clousd.com/agents/",
+  "version": "0.1.1",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "clousd-mcp",
+      "version": "0.1.1",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        { "name": "CLOUSD_API_KEY", "description": "Clousd API key (cl_live_...) from the dashboard, Settings -> API keys", "isRequired": true, "isSecret": true }
+      ]
+    }
+  ]
+}
