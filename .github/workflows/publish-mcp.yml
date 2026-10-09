@@ -1,4 +1,4 @@
-name: publish
+name: publish-mcp
 
 on:
   release:
@@ -8,7 +8,7 @@ on:
 jobs:
   pypi:
     runs-on: ubuntu-latest
-    environment: pypi
+    environment: pypi-mcp
     permissions:
       id-token: write
       contents: read
@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install build
-      - run: python -m build --outdir dist python
+      - run: python -m build --outdir dist mcp
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
