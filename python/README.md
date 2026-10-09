@@ -73,6 +73,7 @@ Or from the command line (`pip install "clousd[image]"` adds Pillow for the numb
 
 ```bash
 clousd run "Set an alarm for 7:30 AM" --device dev_04f2 --model-url http://127.0.0.1:8080/v1
+clousd run "Turn on Dark theme" --device dev_04f2 --model-url ... --save-recipe dark.json   # the run becomes a recipe
 clousd bench --device dev_04f2 --model-url http://127.0.0.1:8080/v1      # 12 everyday tasks with automatic checks
 clousd explore com.android.settings --device dev_04f2                   # map of the app's screens + draft app pack
 clousd record start --device dev_04f2   # ... do the flow on the phone ...   clousd record stop --device dev_04f2 --out flow.json

@@ -44,6 +44,7 @@ def main(argv=None) -> None:
     r.add_argument("--device", required=True)
     r.add_argument("--max-steps", type=int, default=25)
     r.add_argument("--trace", default="", help="write every step as JSON lines here")
+    r.add_argument("--save-recipe", default="", help="record the run and save it as a recipe file: repeat it later without a model")
     model_args(r)
 
     rec = sub.add_parser("record", help="record a recipe from what is done on the phone")
@@ -82,8 +83,17 @@ def main(argv=None) -> None:
     d = c.device(a.device)
     if a.cmd == "run":
         from .agent import Agent
+        if a.save_recipe:
+            d.record_start()
         res = Agent(d, _model(a), vision=not a.no_vision, max_steps=a.max_steps, trace_path=a.trace or None).run(a.goal)
         print(f"{res.status}: {res.answer}  ({len(res.steps)} steps, {res.seconds:.0f} s)")
+        if a.save_recipe:
+            rec = d.record_stop(save=False).get("recipe") or {}
+            if res.status == "done":
+                open(a.save_recipe, "w", encoding="utf-8").write(json.dumps(rec, indent=2, ensure_ascii=False) + "\n")
+                print(f"recipe saved to {a.save_recipe} ({len(rec.get('steps', []))} steps): clousd recipe {a.save_recipe} --device {a.device}")
+            else:
+                print("the task did not finish - no recipe saved")
         sys.exit(0 if res.status == "done" else 1)
     if a.cmd == "record":
         if a.op == "start":
