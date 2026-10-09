@@ -42,7 +42,7 @@ phone.wait_text("Berlin", timeout=30)          # check
 | `find_text(text)` | `open_app(pkg)`, `close_app(pkg)`, `open_url(url)` | `restore(id)` |
 | `size()` | `tap_text(text)`, `wait_text(text, timeout)` | `clone(id, name)` |
 | `installed()`, `logs()` | `start()`, `stop()`, `restart()` | `c.job(id).wait()` |
-| `observe(width, ui)` | `act(op, settle, seq, ...)`, `long_press(x, y, ms)` | `recipe(...)` |
+| `observe(width, ui)`, `screenrecord(seconds)` | `act(op, settle, seq, ...)`, `long_press(x, y, ms)` | `recipe(...)` |
 | `notifications()`, `clipboard_get()` | `intent(action, data, ...)`, `settings("wifi")` | `record_start()` / `record_stop()` |
 | `app_info(pkg)`, `crashes(pkg)`, `health()` | `clipboard_set(text)`, `notifications_open()` / `_clear()` | |
 

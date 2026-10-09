@@ -119,6 +119,15 @@ paths:
         "409":
           description: The screen changed since the observation `seq` came from (another observe or act); nothing was done
           content: { application/json: { schema: { type: object, properties: { error: { type: string, const: stale }, message: { type: string }, seq: { type: integer } } } } }
+  /devices/{name}/screenrecord:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    get:
+      summary: Record the screen for a few seconds
+      parameters:
+        - { name: seconds, in: query, description: "1-60, default 10", schema: { type: integer, minimum: 1, maximum: 60 } }
+      responses:
+        "200": { description: The recording, content: { video/mp4: { schema: { type: string, format: binary } } } }
+        "409": { description: Another recording is running on this phone }
   /devices/{name}/recipe:
     parameters: [{ $ref: "#/components/parameters/name" }]
     post:

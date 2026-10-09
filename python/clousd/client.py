@@ -371,6 +371,10 @@ class Device:
         d = self._data("crashes", package=package) if package else self._data("crashes")
         return d if isinstance(d, list) else []
 
+    def screenrecord(self, seconds: int = 10) -> bytes:
+        """Record the screen for 1-60 seconds and return the MP4 (what happened during a run, for a person to watch)."""
+        return self.client.request("GET", self._p("screenrecord"), params={"seconds": int(seconds)}, timeout=seconds + 120, raw=True)
+
     def health(self) -> Dict[str, Any]:
         """running, booted, network (type, country, ip, ok) and the latest automatic check (verdict, findings)."""
         d = self._data("health")
