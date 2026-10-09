@@ -1,5 +1,7 @@
 # Clousd SDK
 
+[![tests](https://github.com/Clousd-Android/clousd-sdk/actions/workflows/tests.yml/badge.svg)](https://github.com/Clousd-Android/clousd-sdk/actions/workflows/tests.yml)
+
 Cloud Android phones that look and behave like real devices, driven over HTTPS. This repository holds the public
 API description, the Python client and an MCP server, so a script or an AI agent can look at a phone's screen,
 act on it, check the result and reset the phone to a saved state between runs.
