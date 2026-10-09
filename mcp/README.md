@@ -26,6 +26,25 @@ Any MCP client (Cursor, Windsurf, Zed, a desktop assistant or your own agent) - 
 
 Clients that take a command line instead of JSON: `clousd-mcp` with `CLOUSD_API_KEY` in the environment.
 
+## Remote server (no install)
+
+The same server runs at `https://api.clousd.com/mcp` (streamable HTTP). Point any MCP client at it with your key in
+the `Authorization` header; clients that cannot set headers can pass `?api_key=cl_live_...` in the URL.
+
+```json
+{
+  "mcpServers": {
+    "clousd": {
+      "url": "https://api.clousd.com/mcp",
+      "headers": { "Authorization": "Bearer cl_live_..." }
+    }
+  }
+}
+```
+
+Self-hosting the remote mode: `CLOUSD_MCP_HTTP=127.0.0.1:8790 clousd-mcp` serves `/mcp` over HTTP; every request must
+carry a key, nothing is read from the environment.
+
 ## Tools
 
 Four tools, on purpose - agents choose better from a few large tools than from a dozen small ones:

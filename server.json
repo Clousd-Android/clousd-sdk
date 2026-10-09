@@ -4,12 +4,15 @@
   "description": "A real Android phone in the cloud for MCP agents: observe the screen, act, reset to a saved state.",
   "repository": { "url": "https://github.com/Clousd-Android/clousd-sdk", "source": "github" },
   "websiteUrl": "https://clousd.com/agents/",
-  "version": "0.1.1",
+  "version": "0.1.2",
+  "remotes": [
+    { "type": "streamable-http", "url": "https://api.clousd.com/mcp", "headers": [ { "name": "Authorization", "description": "Bearer cl_live_... (Clousd API key)", "isRequired": true, "isSecret": true } ] }
+  ],
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "clousd-mcp",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "transport": { "type": "stdio" },
       "environmentVariables": [
         { "name": "CLOUSD_API_KEY", "description": "Clousd API key (cl_live_...) from the dashboard, Settings -> API keys", "isRequired": true, "isSecret": true }

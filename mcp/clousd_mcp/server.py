@@ -19,23 +19,59 @@ from typing import Dict, Optional
 from clousd import Clousd, ClousdError
 
 try:   # mcp 2.x: FastMCP became MCPServer
-    from mcp.server.mcpserver import Image, MCPServer as _Server
+    from mcp.server.mcpserver import Context, Image, MCPServer as _Server
 except ImportError:   # mcp 1.x
-    from mcp.server.fastmcp import FastMCP as _Server, Image
+    from mcp.server.fastmcp import Context, FastMCP as _Server, Image
+
+import base64
+import contextvars
+import json
 
 SHOT_WIDTH = int(os.environ.get("CLOUSD_SHOT_WIDTH", "540"))
 
 mcp = _Server("clousd", instructions="Real Android phones in the cloud. Call observe before acting; prefer act "
               "tap_text over coordinates; use snapshots restore to start each run from the same state.")
-_client: Optional[Clousd] = None
+_clients: Dict[str, Clousd] = {}   # API key → client (one per key; the remote server serves many keys)
+_key: contextvars.ContextVar = contextvars.ContextVar("clousd_key", default="")
 _scale: Dict[str, float] = {}   # device name → device pixels per screenshot pixel
 
 
+def _use(ctx: Optional[Context]) -> None:
+    """Remember which API key this request carries. Over HTTP (the remote server at api.clousd.com/mcp) the key comes
+    with every request: `Authorization: Bearer cl_live_…`, `X-API-Key`, or `?api_key=` / `?clousdApiKey=` /
+    `?config=<base64 JSON with clousdApiKey>` for clients that pass configuration in the URL. Over stdio there is no
+    request and the key is CLOUSD_API_KEY from the environment."""
+    key = ""
+    try:
+        h = ctx.headers if ctx is not None else None
+        if h:
+            auth = h.get("authorization", "") or h.get("Authorization", "")
+            if auth.lower().startswith("bearer "):
+                key = auth[7:].strip()
+            key = key or h.get("x-api-key", "") or h.get("X-API-Key", "")
+        req = getattr(ctx.request_context, "request", None) if ctx is not None else None
+        q = getattr(req, "query_params", None)
+        if not key and q:
+            key = q.get("api_key", "") or q.get("clousdApiKey", "") or q.get("CLOUSD_API_KEY", "")
+            if not key and q.get("config"):
+                try:
+                    cfg = json.loads(base64.b64decode(q["config"] + "=" * (-len(q["config"]) % 4)))
+                    key = cfg.get("clousdApiKey") or cfg.get("CLOUSD_API_KEY") or cfg.get("api_key") or ""
+                except Exception:
+                    key = ""
+    except Exception:
+        key = ""
+    _key.set(key)
+
+
 def client() -> Clousd:
-    global _client
-    if _client is None:
-        _client = Clousd()
-    return _client
+    key = _key.get() or os.environ.get("CLOUSD_API_KEY", "")
+    if not key:
+        raise ClousdError(401, "no_key", "No Clousd API key: send Authorization: Bearer cl_live_… (remote) or set CLOUSD_API_KEY (stdio)")
+    c = _clients.get(key)
+    if c is None:
+        c = _clients[key] = Clousd(api_key=key)
+    return c
 
 
 def _jpeg_w(b: bytes) -> int:
@@ -74,11 +110,12 @@ def _px(device: str, v: Optional[float]) -> int:
 
 
 @mcp.tool()
-def devices(op: str = "list", device: str = "") -> object:
+def devices(op: str = "list", device: str = "", ctx: Optional[Context] = None) -> object:
     """Phones this API key can use.
     op=list (default): name, state (running / stopped / starting / error), model, Android, network of each phone.
     op=start / op=stop with `device`: start a stopped phone (waits until it has booted, one to three minutes) or stop
     one (a stopped phone keeps its state and costs nothing)."""
+    _use(ctx)
     try:
         if op == "list":
             return [d.data for d in client().devices()]
@@ -107,9 +144,10 @@ def _elements(d: dict, scale: float, limit: int = 80) -> str:
 
 
 @mcp.tool()
-def observe(device: str, with_text: bool = True) -> list:
+def observe(device: str, with_text: bool = True, ctx: Optional[Context] = None) -> list:
     """Look at the phone: a fresh screenshot plus (with_text) the app on screen and its elements with centre
     coordinates. Give tap/swipe coordinates in this image's pixels."""
+    _use(ctx)
     d = client().device(device)
     try:
         o = d.observe(width=SHOT_WIDTH, ui=with_text)
@@ -149,13 +187,14 @@ def observe(device: str, with_text: bool = True) -> list:
 @mcp.tool()
 def act(device: str, action: str, x: Optional[float] = None, y: Optional[float] = None,
         x2: Optional[float] = None, y2: Optional[float] = None, text: str = "", ms: int = 300,
-        timeout: int = 30) -> str:
+        timeout: int = 30, ctx: Optional[Context] = None) -> str:
     """Do one thing on the phone, then wait until the screen settles. action is one of:
     tap (x, y) · swipe (x, y, x2, y2, ms) · scroll (text=down|up) · tap_text (text: tap the element whose text
     contains it - usually more reliable than coordinates) · wait_text (text, timeout up to 120 s) · type (text into the
     focused field, any language) · key (text=home|back|recents|enter|tab|del|menu|power|volume_up|volume_down) ·
     open_app (text=package, e.g. com.android.chrome) · close_app (text=package) · open_url (text=https://…) ·
     installed (list apps you can open). Coordinates are in the pixels of the last observe image."""
+    _use(ctx)
     d = client().device(device)
     try:
         if action == "tap":
@@ -196,11 +235,12 @@ def act(device: str, action: str, x: Optional[float] = None, y: Optional[float] 
 
 
 @mcp.tool()
-def snapshots(device: str, op: str = "list", snapshot_id: str = "", new_name: str = "") -> object:
+def snapshots(device: str, op: str = "list", snapshot_id: str = "", new_name: str = "", ctx: Optional[Context] = None) -> object:
     """Saved states of a phone, for starting every run from the same point.
     op=list (default): id, created, android, current, restorable.
     op=save: save the current state. op=restore with snapshot_id: reset the phone to that state.
     op=clone with snapshot_id and new_name (letters and digits, up to 16): a new phone from that state."""
+    _use(ctx)
     d = client().device(device)
     try:
         if op == "list":
@@ -217,7 +257,20 @@ def snapshots(device: str, op: str = "list", snapshot_id: str = "", new_name: st
 
 
 def main() -> None:
-    mcp.run()
+    """stdio by default. CLOUSD_MCP_HTTP=host:port runs the remote (streamable HTTP) server at /mcp: every request
+    carries the customer's key (see _use), sessions are stateless, so any number of clients share one process."""
+    http = os.environ.get("CLOUSD_MCP_HTTP", "").strip()
+    if not http:
+        mcp.run()
+        return
+    host, _, port = http.rpartition(":")
+    kw = dict(host=host or "127.0.0.1", port=int(port or 8790), stateless_http=True, json_response=True)
+    try:
+        mcp.run(transport="streamable-http", **kw)
+    except TypeError:   # mcp 1.x: host/port live in settings
+        for k_, v in kw.items():
+            setattr(mcp.settings, k_, v)
+        mcp.run(transport="streamable-http")
 
 
 if __name__ == "__main__":
