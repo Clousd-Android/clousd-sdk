@@ -7,7 +7,7 @@ the job needs.
 Early access: ask for a key at [clousd.com/agents](https://clousd.com/agents/#access).
 
 ```bash
-pip install clousd
+pip install "git+https://github.com/Clousd-Android/clousd-sdk#subdirectory=python"
 export CLOUSD_API_KEY=cl_live_...
 ```
 

@@ -8,7 +8,8 @@ Early access: ask for a key at [clousd.com/agents](https://clousd.com/agents/#ac
 ## Install
 
 ```bash
-pip install clousd-mcp
+pip install "git+https://github.com/Clousd-Android/clousd-sdk#subdirectory=python"
+pip install "git+https://github.com/Clousd-Android/clousd-sdk#subdirectory=mcp"
 ```
 
 Any MCP client (Cursor, Windsurf, Zed, a desktop assistant or your own agent) - stdio server, one environment variable:

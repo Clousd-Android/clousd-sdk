@@ -30,7 +30,7 @@ fewer "unusual activity" interruptions, the same code paths a user hits.
 ### Python
 
 ```bash
-pip install clousd
+pip install "git+https://github.com/Clousd-Android/clousd-sdk#subdirectory=python"
 export CLOUSD_API_KEY=cl_live_...
 ```
 
@@ -55,7 +55,7 @@ png = phone.screenshot()             # PNG; pass width=540 for a smaller JPEG
 ### MCP
 
 ```bash
-pip install clousd-mcp
+pip install "git+https://github.com/Clousd-Android/clousd-sdk#subdirectory=mcp"
 ```
 
 Any MCP client (Cursor, Windsurf, Zed, a desktop assistant or your own agent):
@@ -119,6 +119,8 @@ pip install -e python
 pip install -e mcp
 python -m unittest discover -s python/tests
 ```
+
+Packages on PyPI (`pip install clousd`, `pip install clousd-mcp`) follow once the API leaves early access.
 
 The tests run against a local fake server; no key needed.
 
