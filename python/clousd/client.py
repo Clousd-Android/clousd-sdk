@@ -219,7 +219,7 @@ class Device:
         (the action probably missed). With `seq` from observe() raises ClousdError 409 "stale" and does nothing if the
         screen changed since (another observe or act happened)."""
         body = {"op": op, "settle": settle, **kw}
-        if seq:
+        if seq is not None:
             body["seq"] = seq
         return self.client.request("POST", self._p("act"), json=body, timeout=(kw.get("ms", 0) / 1000 + 90))
 
@@ -384,18 +384,23 @@ class Device:
     def recipe(self, package: str = "", action: str = "", recipe: Optional[Dict[str, Any]] = None,
                vars: Optional[Dict[str, str]] = None, wait: bool = True, timeout: float = 1800) -> Any:
         """Run a recipe: a built-in one (package + action, e.g. "warm") or your own `recipe` dict {app, steps}
-        (a recorded draft). Returns the result text; with wait=False a Job."""
-        body: Dict[str, Any] = {"vars": vars or {}}
+        (a recorded draft). The run is started as a job and polled, so a dropped connection never starts it twice.
+        Returns {ok, output, job}; with wait=False the Job itself. Raises ClousdError when the recipe fails."""
+        body: Dict[str, Any] = {"vars": vars or {}, "async": True}
         if recipe is not None:
             body["recipe"] = recipe
             if package:
                 body["package"] = package
         else:
             body.update(package=package, action=action)
+        job = self.client._job(self.client.request("POST", self._p("recipe"), json=body), wait, timeout)
         if not wait:
-            body["async"] = True
-            return self.client._job(self.client.request("POST", self._p("recipe"), json=body), False, timeout)
-        return self.client.request("POST", self._p("recipe"), json=body, timeout=timeout).get("output", "")
+            return job
+        out = str(job.output or "")
+        ok = job.state != "failed" and not out.startswith("step ") and "failed" not in out.lower()[:60]
+        if job.state == "failed":
+            raise ClousdError(500, "recipe_failed", out[:300])
+        return {"ok": ok, "output": out, "job": job.id}
 
     def record_start(self) -> Dict[str, Any]:
         """Start recording: what is done on this phone (live view, API) becomes recipe steps."""

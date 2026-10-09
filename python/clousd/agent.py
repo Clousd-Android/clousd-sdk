@@ -340,7 +340,12 @@ class Agent:
         try:
             for step in range(1, self.max_steps + 1):
                 ts = time.time()
-                obs = self._observe()
+                try:
+                    obs = self._observe()
+                except Exception as e:   # 401/403/404, 5xx after retries, transport timeout: a result, not a traceback
+                    res.status, res.answer = "error", f"observe: {getattr(e, 'message', '') or e}"
+                    self._say(f"  {step}: {res.answer}")
+                    break
                 t_obs = time.time() - ts
                 img = obs.get("image", {})
                 scale = (obs.get("screen", {}).get("w") or 1080) / float(img.get("w") or self.width)
@@ -363,17 +368,15 @@ class Agent:
                 rec: Dict[str, Any] = {"step": step, "app": obs.get("package"), "elements": len(els), "tool": name, "args": args,
                                        "said": said[:400], "observe_s": round(t_obs, 2), "model_s": round(t_model, 2),
                                        "tokens": usage.get("prompt_tokens"), "out_tokens": usage.get("completion_tokens")}
-                if name == "done":
-                    res.status, res.answer = "done", str(args.get("answer", said))
-                    rec["result"] = "done"
+                if name in ("done", "fail"):
+                    res.status = name
+                    res.answer = str(args.get("answer" if name == "done" else "reason", said))
+                    rec["result"] = name
                     res.steps.append(rec)
-                    self._say(f"  {step}: done - {res.answer[:120]}")
-                    break
-                if name == "fail":
-                    res.status, res.answer = "fail", str(args.get("reason", said))
-                    rec["result"] = "fail"
-                    res.steps.append(rec)
-                    self._say(f"  {step}: fail - {res.answer[:120]}")
+                    if trace:
+                        trace.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                        trace.flush()
+                    self._say(f"  {step}: {name} - {res.answer[:120]}")
                     break
                 if name != "wait":
                     self._waits = 0
@@ -388,7 +391,7 @@ class Agent:
                 except ClousdError as e:
                     out = "the screen changed before the action - looking again" if e.status == 409 and e.error == "stale" else f"error: {e.message or e.error}"
                     errors += 0 if e.status == 409 else 1
-                except (ValueError, KeyError) as e:
+                except Exception as e:   # model-made arguments (x: null), transport timeouts: count as an error, keep going
                     out = f"error: {e}"
                     errors += 1
                 rec["result"], rec["act_s"] = out, round(time.time() - ta, 2)

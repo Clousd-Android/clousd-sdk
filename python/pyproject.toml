@@ -21,7 +21,7 @@ classifiers = [
 image = ["pillow>=9"]
 
 [project.scripts]
-clousd = "clousd.cli:main"
+clousd = "clousd.cli:entry"
 
 [project.urls]
 Homepage = "https://clousd.com/agents/"

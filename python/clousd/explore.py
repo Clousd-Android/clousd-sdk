@@ -21,10 +21,76 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .client import ClousdError, Device
 
-DANGER = re.compile(r"delete|remove|erase|reset|wipe|format|uninstall|sign ?out|log ?out|logout|disconnect|forget|"
-                    r"buy|pay|purchase|subscribe|order|checkout|send|post|publish|share|call|dial|report|block|"
-                    r"factory|clear (data|storage|cache)|turn off|power off|restart|reboot|airplane|developer", re.I)
+# Words that mean an action with consequences: the walker never taps an element whose text (or any text drawn inside
+# it) contains one of them as a whole word. English plus the Latin-script languages a phone's exit country commonly
+# sets (German, French, Spanish, Portuguese, Italian, Indonesian, Vietnamese). Other scripts: explore only with the
+# phone set to one of these languages, or review the map before trusting it.
+_DANGER_WORDS = (
+    # destroy / leave
+    "delete remove erase reset wipe format uninstall disable deactivate deregister unregister unsubscribe unfollow unfriend "
+    "leave archive clear forget disconnect logout sign-out signout log-out power-off restart reboot factory "
+    # money / outward
+    "buy pay purchase subscribe order checkout cart donate tip transfer withdraw deposit send post publish share upload "
+    "submit call dial report block flag invite "
+    # confirmations (a dialog opened by a safe tap must not be confirmed)
+    "ok okay yes confirm continue accept agree allow enable install apply save done proceed next "
+    # de
+    "löschen entfernen zurücksetzen deinstallieren abmelden kaufen bezahlen senden teilen veröffentlichen bestätigen "
+    "weiter akzeptieren erlauben anrufen melden blockieren "
+    # fr
+    "supprimer effacer réinitialiser désinstaller déconnexion déconnecter acheter payer envoyer partager publier "
+    "confirmer continuer accepter autoriser appeler signaler bloquer "
+    # es
+    "eliminar borrar restablecer desinstalar salir comprar pagar enviar compartir publicar confirmar continuar aceptar "
+    "permitir llamar denunciar reportar bloquear "
+    # pt
+    "excluir apagar redefinir desinstalar sair comprar pagar enviar compartilhar partilhar publicar confirmar continuar "
+    "aceitar permitir ligar denunciar bloquear "
+    # it
+    "elimina cancella ripristina disinstalla esci acquista paga invia condividi pubblica conferma continua accetta "
+    "consenti chiama segnala blocca "
+    # id
+    "hapus setel-ulang keluar beli bayar kirim bagikan terbitkan konfirmasi lanjutkan terima izinkan telepon laporkan blokir "
+    # vi
+    "xóa xoá đặt-lại gỡ đăng-xuất mua thanh-toán gửi chia-sẻ đăng xác-nhận tiếp-tục chấp-nhận cho-phép gọi báo-cáo chặn"
+).split()
+_DANGER = re.compile(r"(?<![\w-])(?:" + "|".join(re.escape(w).replace(r"\-", "[ -]?") for w in _DANGER_WORDS) + r")(?![\w-])", re.I)
+_DANGER_PHRASES = re.compile(r"turn off|switch off|clear (data|storage|cache|history|browsing)|force stop|sign out|log out|"
+                             r"add to (cart|basket)|check out|developer options", re.I)
 POPUP = re.compile(r"^(not now|skip|cancel|no thanks|maybe later|close|dismiss|got it|ok|allow|deny|don.t allow|later)$", re.I)
+CONFIRM = re.compile(r"^(ok|okay|yes|confirm|continue|accept|agree|allow|enable|turn on|turn off|disable|force stop|delete|remove|"
+                     r"uninstall|sign out|log out|cancel|no|not now|don.t allow|deny)$", re.I)
+
+
+def dangerous(text: str) -> bool:
+    """True when a label (its own text, or any text inside the tapped element) names an action with consequences."""
+    t = text.replace("_", " ")
+    return bool(_DANGER.search(t) or _DANGER_PHRASES.search(t))
+
+
+def _inside(a: List[int], b: List[int]) -> bool:
+    return a[0] >= b[0] and a[1] >= b[1] and a[2] <= b[2] and a[3] <= b[3]
+
+
+def _subtree_text(o: Dict[str, Any], n: Dict[str, Any]) -> str:
+    """The element's own label and id plus every label drawn inside its bounds: the text of a clickable row usually
+    sits on a child view."""
+    parts = [_label(n), _rid(n)]
+    b = n.get("b")
+    if b:
+        for m in o.get("ui", []):
+            mb = m.get("b")
+            if mb and m is not n and _inside(mb, b):
+                parts.append(_label(m))
+                parts.append(_rid(m))
+    return " ".join(p for p in parts if p)
+
+
+def is_dialog(o: Dict[str, Any]) -> bool:
+    """A small screen whose buttons are confirmations: a dialog. The walker never presses its buttons."""
+    labs = [_label(m) for m in o.get("ui", []) if _label(m)]
+    btns = [x for x in labs if CONFIRM.match(x)]
+    return 0 < len(btns) <= 3 and len(labs) <= 10
 
 
 def _label(n: Dict[str, Any]) -> str:
@@ -49,7 +115,7 @@ def _clickables(o: Dict[str, Any], pkg: str) -> List[Dict[str, Any]]:
             continue
         lab, rid = _label(n), _rid(n)
         key = lab or rid
-        if not key or key in seen or DANGER.search(key) or DANGER.search(rid):
+        if not key or key in seen or dangerous(_subtree_text(o, n)):
             continue
         seen.add(key)
         out.append(n)
@@ -136,6 +202,10 @@ def explore(d: Device, package: str, depth: int = 2, max_screens: int = 25, per_
             continue
         sc = screens[sig]
         sc["labels"] = sorted({_label(n) for n in o.get("ui", []) if _label(n)})[:80]
+        if is_dialog(o):
+            say(f"screen {sc['id']}: a dialog - its buttons are not explored")
+            d.act("key", key="back")
+            continue
         cands = _clickables(o, package)[:per_screen]
         say(f"screen {sc['id']} {o.get('activity')}: {len(cands)} elements to try")
         for n in cands:

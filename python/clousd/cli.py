@@ -18,7 +18,7 @@ import os
 import sys
 import time
 
-from .client import Clousd
+from .client import Clousd, ClousdError
 
 
 def _model(a):
@@ -83,12 +83,17 @@ def main(argv=None) -> None:
     d = c.device(a.device)
     if a.cmd == "run":
         from .agent import Agent
+        model = _model(a)   # before the recording starts: a missing model must not leave a recording running
         if a.save_recipe:
             d.record_start()
-        res = Agent(d, _model(a), vision=not a.no_vision, max_steps=a.max_steps, trace_path=a.trace or None).run(a.goal)
+        rec = {}
+        try:
+            res = Agent(d, model, vision=not a.no_vision, max_steps=a.max_steps, trace_path=a.trace or None).run(a.goal)
+        finally:
+            if a.save_recipe:
+                rec = d.record_stop(save=False).get("recipe") or {}
         print(f"{res.status}: {res.answer}  ({len(res.steps)} steps, {res.seconds:.0f} s)")
         if a.save_recipe:
-            rec = d.record_stop(save=False).get("recipe") or {}
             if res.status == "done":
                 open(a.save_recipe, "w", encoding="utf-8").write(json.dumps(rec, indent=2, ensure_ascii=False) + "\n")
                 print(f"recipe saved to {a.save_recipe} ({len(rec.get('steps', []))} steps): clousd recipe {a.save_recipe} --device {a.device}")
@@ -112,12 +117,18 @@ def main(argv=None) -> None:
                 print(text)
         return
     if a.cmd == "recipe":
-        vars_ = dict(v.split("=", 1) for v in a.var if "=" in v)
+        bad = [v for v in a.var if "=" not in v]
+        if bad:
+            sys.exit("--var takes name=value, got: " + ", ".join(bad))
+        vars_ = dict(v.split("=", 1) for v in a.var)
+        if not a.file and not (a.package and a.action):
+            sys.exit("give a recipe file, or --package and --action of a built-in recipe")
         if a.file:
-            print(d.recipe(recipe=json.load(open(a.file, encoding="utf-8")), vars=vars_))
+            r = d.recipe(recipe=json.load(open(a.file, encoding="utf-8")), vars=vars_)
         else:
-            print(d.recipe(a.package, a.action, vars=vars_))
-        return
+            r = d.recipe(a.package, a.action, vars=vars_)
+        print(r.get("output", ""))
+        sys.exit(0 if r.get("ok") else 1)
     if a.cmd == "explore":
         from .explore import explore
         g = explore(d, a.package, depth=a.depth, max_screens=a.max_screens)
@@ -131,8 +142,18 @@ def main(argv=None) -> None:
         rows = run_bench(d, _model(a), only=only, max_steps=a.max_steps, vision=not a.no_vision, out=a.out or None)
         ok = sum(1 for r in rows if r["pass"])
         print(f"\n{ok}/{len(rows)} passed")
-        return
+        sys.exit(0 if ok == len(rows) else 1)
+
+
+def entry() -> None:
+    """Console script: API errors as one line and exit code 2, not a traceback."""
+    try:
+        main()
+    except ClousdError as e:
+        sys.exit(f"clousd: {e.status} {e.error}: {e.message}".rstrip(": "))
+    except KeyboardInterrupt:
+        sys.exit(130)
 
 
 if __name__ == "__main__":
-    main()
+    entry()

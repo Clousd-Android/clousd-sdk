@@ -57,14 +57,24 @@ def _use(ctx: Optional[Context]) -> None:
     `?config=<base64 JSON with clousdApiKey>` for clients that pass configuration in the URL. Over stdio there is no
     request and the key is CLOUSD_API_KEY from the environment."""
     key = ""
+    req = None
     try:
-        h = ctx.headers if ctx is not None else None
+        req = getattr(ctx.request_context, "request", None) if ctx is not None else None
+    except Exception:   # stdio: no request context at all
+        req = None
+    try:
+        # mcp 2.x: ctx.headers; mcp 1.x: only the transport request carries them
+        h = getattr(ctx, "headers", None) if ctx is not None else None
+        if h is None and req is not None:
+            h = getattr(req, "headers", None)
         if h:
             auth = h.get("authorization", "") or h.get("Authorization", "")
             if auth.lower().startswith("bearer "):
                 key = auth[7:].strip()
             key = key or h.get("x-api-key", "") or h.get("X-API-Key", "")
-        req = getattr(ctx.request_context, "request", None) if ctx is not None else None
+    except Exception:
+        key = ""
+    try:
         q = getattr(req, "query_params", None)
         if not key and q:
             key = q.get("api_key", "") or q.get("clousdApiKey", "") or q.get("CLOUSD_API_KEY", "")
@@ -85,6 +95,8 @@ def client() -> Clousd:
         raise ClousdError(401, "no_key", "No Clousd API key: send Authorization: Bearer cl_live_… (remote) or set CLOUSD_API_KEY (stdio)")
     c = _clients.get(key)
     if c is None:
+        if len(_clients) >= 256:   # remote mode: unknown keys must not grow the cache without bound
+            _clients.pop(next(iter(_clients)))
         c = _clients[key] = Clousd(api_key=key)
     return c
 
@@ -261,6 +273,8 @@ def act(device: Device_,
                 return "error: no such element - call observe first and use a number from its list"
             cx, cy, _label = last["pts"][element]
             body: Dict[str, Any] = {"op": action, "x": cx, "y": cy}
+            if last.get("seq") is not None:
+                body["seq"] = last["seq"]   # the number is only meaningful on the screen it was observed on
             if action == "long_press":
                 body["ms"] = max(ms, 600)
         elif action == "tap":
@@ -305,8 +319,12 @@ def act(device: Device_,
                 return out + " (the screen did not change - the action probably missed; observe again)"
             return out + ("" if r.get("settled", True) else " (screen still changing)")
         except ClousdError as e:
+            if e.status == 409 and e.error == "stale":
+                _els.pop(_slot(device), None)
+                return "error: the screen changed since the last observe - call observe again and use its numbers"
             if e.status != 404:
                 raise
+            body.pop("seq", None)
             return d.action(op, **body).get("output") or "ok"   # older gateway without /act
     except (ClousdError, ValueError) as e:
         return _err(e)
@@ -389,10 +407,12 @@ def recipe(device: Device_,
         if op == "run":
             v = json.loads(vars) if vars.strip() else {}
             if steps.strip():
-                return {"result": d.recipe(recipe=json.loads(steps), vars=v)}
-            if package and action:
-                return {"result": d.recipe(package, action, vars=v)}
-            return {"error": "run needs package + action, or steps"}
+                r = d.recipe(recipe=json.loads(steps), vars=v)
+            elif package and action:
+                r = d.recipe(package, action, vars=v)
+            else:
+                return {"error": "run needs package + action, or steps"}
+            return {"ok": bool(r.get("ok", True)), "result": r.get("output", ""), "job": r.get("job", "")}
         if op == "record_start":
             return d.record_start()
         if op == "record_status":
