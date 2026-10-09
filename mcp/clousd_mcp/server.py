@@ -265,6 +265,15 @@ def main() -> None:
         return
     host, _, port = http.rpartition(":")
     kw = dict(host=host or "127.0.0.1", port=int(port or 8790), stateless_http=True, json_response=True)
+    # DNS-rebinding protection of the SDK allows only localhost Host headers; behind a reverse proxy the public name
+    # arrives as Host, so list it in CLOUSD_MCP_HOSTS (comma-separated), e.g. CLOUSD_MCP_HOSTS=api.clousd.com
+    try:
+        from mcp.server.transport_security import TransportSecuritySettings
+        hosts = [h.strip() for h in os.environ.get("CLOUSD_MCP_HOSTS", "").split(",") if h.strip()]
+        hosts += [f"{kw['host']}:{kw['port']}", f"localhost:{kw['port']}", f"127.0.0.1:{kw['port']}"]
+        kw["transport_security"] = TransportSecuritySettings(allowed_hosts=hosts, allowed_origins=["https://" + h for h in hosts] + ["http://" + h for h in hosts])
+    except ImportError:
+        pass
     try:
         mcp.run(transport="streamable-http", **kw)
     except TypeError:   # mcp 1.x: host/port live in settings
