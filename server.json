@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "io.github.Clousd-Android/clousd-mcp",
-  "description": "A real Android phone in the cloud for any MCP agent: observe the screen, act on it, reset to a saved state between runs.",
+  "description": "A real Android phone in the cloud for MCP agents: observe the screen, act, reset to a saved state.",
   "repository": { "url": "https://github.com/Clousd-Android/clousd-sdk", "source": "github" },
   "websiteUrl": "https://clousd.com/agents/",
   "version": "0.1.1",
