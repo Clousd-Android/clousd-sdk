@@ -154,6 +154,11 @@ def elements_of(obs: Dict[str, Any], limit: int = 70) -> List[Element]:
                                          ("checked", "checked"), ("selected", "selected"), ("off", "disabled")) if nd.get(k))
         if nd.get("class", "").endswith("EditText") and "input" not in flags:
             flags = (flags + " input").strip()
+        if not label:
+            # no text, description or id: say what it is and where, so the model does not keep pressing a mystery button
+            w, h = b[2] - b[0], b[3] - b[1]
+            shape = "icon" if max(w, h) < 200 else ("wide bar" if w > 3 * h else "area")
+            label = f"unlabeled {nd.get('class', 'element').split('.')[-1]} {shape}"
         out.append(Element(len(out), label[:80], nd.get("class", "").split(".")[-1], list(b), flags))
         if len(out) >= limit:
             break
