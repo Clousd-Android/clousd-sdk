@@ -10,7 +10,7 @@ act on it, check the result and reset the phone to a saved state between runs.
 |---|---|
 | [`openapi.yaml`](openapi.yaml) | OpenAPI 3.1 description of the public API v1 (`https://api.clousd.com/v1`) |
 | [`python/`](python) | `clousd` - Python client: devices, screenshots, screen text, taps, typing, snapshots, ADB, jobs |
-| [`mcp/`](mcp) | `clousd-mcp` - MCP server with four tools (`devices`, `observe`, `act`, `snapshots`) for any MCP-capable agent |
+| [`mcp/`](mcp) | `clousd-mcp` - MCP server with six tools (`devices`, `observe`, `act`, `inspect`, `snapshots`, `recipe`) for any MCP-capable agent, local or hosted at `https://api.clousd.com/mcp` |
 | [`docs/agent-loop.md`](docs/agent-loop.md) | How an agent drives a phone: the observe → act → verify loop, with the mistakes that cost the most time |
 
 Early access: keys are issued on request at [clousd.com/agents](https://clousd.com/agents/#access).
@@ -127,6 +127,17 @@ python -m unittest discover -s python/tests
 Releases are published to PyPI as [`clousd`](https://pypi.org/project/clousd/) and [`clousd-mcp`](https://pypi.org/project/clousd-mcp/).
 
 The tests run against a local fake server; no key needed.
+
+## Links
+
+- Phones for AI agents, early access: https://clousd.com/agents/
+- Docs: https://clousd.com/docs/ · API reference: https://clousd.com/docs/reference/
+- Device catalog (150+ real models, Android 12 to 17): https://clousd.com/devices/
+- Networks (residential, mobile, ISP, datacenter exits): https://clousd.com/network/
+- Snapshots and clones: https://clousd.com/snapshots/
+- Pricing: https://clousd.com/pricing/
+- Packages: https://pypi.org/project/clousd/ · https://pypi.org/project/clousd-mcp/
+- MCP registry entry: `io.github.Clousd-Android/clousd-mcp` · hosted MCP endpoint: `https://api.clousd.com/mcp`
 
 ## License
 
