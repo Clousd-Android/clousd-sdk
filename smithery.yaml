@@ -8,5 +8,9 @@ startCommand:
       clousdApiKey:
         type: string
         description: Clousd API key (cl_live_...) from the dashboard, Settings -> API keys
+      shotWidth:
+        type: integer
+        description: Screenshot width in pixels for observe (240-1080, default 540)
+        default: 540
   commandFunction: |-
-    (config) => ({ command: "clousd-mcp", args: [], env: { CLOUSD_API_KEY: config.clousdApiKey } })
+    (config) => ({ command: "clousd-mcp", args: [], env: { CLOUSD_API_KEY: config.clousdApiKey, CLOUSD_SHOT_WIDTH: String(config.shotWidth || 540) } })

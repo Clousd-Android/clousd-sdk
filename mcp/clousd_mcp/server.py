@@ -39,6 +39,14 @@ except ImportError:   # clousd < 0.2: plain screenshot, elements numbered here
     _elements_of = None
 
 SHOT_WIDTH = int(os.environ.get("CLOUSD_SHOT_WIDTH", "540"))
+_width: contextvars.ContextVar = contextvars.ContextVar("clousd_shot_width", default=0)   # per request (remote: ?shotWidth=)
+
+
+def shot_width() -> int:
+    """Screenshot width for this request: `shotWidth` from the client's configuration (query or config JSON over
+    HTTP), else CLOUSD_SHOT_WIDTH, else 540. Clamped to 240..1080."""
+    w = _width.get() or SHOT_WIDTH
+    return max(240, min(int(w), 1080))
 
 mcp = _Server("clousd", instructions="Real Android phones in the cloud. Call observe before acting and act on element "
               "numbers from it; use inspect to read notifications, app versions or crashes without touching the screen; "
@@ -74,19 +82,27 @@ def _use(ctx: Optional[Context]) -> None:
             key = key or h.get("x-api-key", "") or h.get("X-API-Key", "")
     except Exception:
         key = ""
+    width = 0
     try:
         q = getattr(req, "query_params", None)
+        if q:
+            try:
+                width = int(q.get("shotWidth", "") or q.get("shot_width", "") or 0)
+            except ValueError:
+                width = 0
         if not key and q:
             key = q.get("api_key", "") or q.get("clousdApiKey", "") or q.get("CLOUSD_API_KEY", "")
             if not key and q.get("config"):
                 try:
                     cfg = json.loads(base64.b64decode(q["config"] + "=" * (-len(q["config"]) % 4)))
                     key = cfg.get("clousdApiKey") or cfg.get("CLOUSD_API_KEY") or cfg.get("api_key") or ""
+                    width = width or int(cfg.get("shotWidth") or 0)
                 except Exception:
                     key = ""
     except Exception:
         key = ""
     _key.set(key)
+    _width.set(width)
 
 
 def client() -> Clousd:
@@ -116,20 +132,20 @@ def _jpeg_w(b: bytes) -> int:
         if 0xC0 <= b[i + 1] <= 0xC3:
             return (b[i + 7] << 8) | b[i + 8]
         i += 2 + ((b[i + 2] << 8) | b[i + 3])
-    return SHOT_WIDTH
+    return shot_width()
 
 
 def _learn_scale(device: str) -> float:
     """Phone pixels per image pixel, from the real image width - never from the requested one."""
     d = client().device(device)
     try:
-        o = d.observe(width=SHOT_WIDTH, ui=False)
+        o = d.observe(width=shot_width(), ui=False)
         _scale[device] = o["screen"]["w"] / float(o["image"]["w"])
     except ClousdError as e:
         if e.status != 404:
             raise
         w, _ = d.size()
-        _scale[device] = w / float(_jpeg_w(d.screenshot(width=SHOT_WIDTH)))
+        _scale[device] = w / float(_jpeg_w(d.screenshot(width=shot_width())))
     return _scale[device]
 
 
@@ -200,14 +216,14 @@ def observe(device: Device_,
     _use(ctx)
     d = client().device(device)
     try:
-        o = d.observe(width=SHOT_WIDTH, ui=with_text)
+        o = d.observe(width=shot_width(), ui=with_text)
     except ClousdError as e:
         if e.status != 404:
             return [_err(e)]
         o = None   # an older gateway without /observe: screenshot + texts the old way
     if o is None:
         try:
-            jpeg = d.screenshot(width=SHOT_WIDTH)
+            jpeg = d.screenshot(width=shot_width())
             w, h = d.size()
         except ClousdError as e:
             return [_err(e)]
@@ -221,7 +237,7 @@ def observe(device: Device_,
                 note += f"\nTexts on screen: unavailable ({e.message or e.error})"
         return [Image(data=jpeg, format="jpeg"), note]
     img, scr = o.get("image", {}), o.get("screen", {})
-    scale = scr.get("w", 1080) / float(img.get("w") or SHOT_WIDTH)
+    scale = scr.get("w", 1080) / float(img.get("w") or shot_width())
     _scale[device] = scale
     jpeg = o["image_bytes"]
     note = f"Screen image {img.get('w')}x{img.get('h')} px (phone {scr.get('w')}x{scr.get('h')}), observation #{o.get('seq')}."
