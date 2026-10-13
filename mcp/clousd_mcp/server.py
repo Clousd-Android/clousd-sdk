@@ -1,6 +1,6 @@
 """MCP server for CLOUSD cloud phones: gives any MCP-capable agent a real Android phone to look at and act on.
 
-Nine tools (a few large tools are easier for a model to choose from than dozens of small ones):
+Ten tools (a few large tools are easier for a model to choose from than dozens of small ones):
   devices   - list the phones this key can use, start or stop one
   observe   - the screen as an image with a number on every element, plus the elements as text
   act       - tap (by element number or point), long_press, swipe, scroll, type, key, open_app, close_app, open_url,
@@ -11,6 +11,7 @@ Nine tools (a few large tools are easier for a model to choose from than dozens 
   fleet     - many phones in one call: list the built-in recipes, run a recipe or steps on up to 32 phones, follow progress
   network   - where phones go online: exit types and countries, the account's proxies, add your own, bind, new IP
   resources - saved accounts (no secrets), texts, the media library; upload and send files to phones
+  account   - the balance, spend per day, hours left, renewals and warnings to tell the user
 
 Screenshots come back `SHOT_WIDTH` px wide (540: ~1200 px long side on a 1080x2400 phone). act takes an element
 number from the last observe, or coordinates in that screenshot; both are converted to the device here.
@@ -52,7 +53,9 @@ def shot_width() -> int:
     w = _width.get() or SHOT_WIDTH
     return max(240, min(int(w), 1080))
 
-mcp = _Server("clousd", instructions="Real Android phones in the cloud. For app tasks (sign in, warm up an account, "
+mcp = _Server("clousd", instructions="Real Android phones in the cloud. Start by checking money with account op=balance "
+              "and tell the user its warnings (hours left, proxy traffic cost, renewals) with the top-up link; actions that "
+              "spend money return a money note when the balance is low - always pass it on. For app tasks (sign in, warm up an account, "
               "publish, delete a post) first look at fleet op=recipes and run a recipe - it waits for the right screens and "
               "handles popups; tap step by step with observe/act only when no recipe fits. For several phones use one "
               "fleet op=run for all of them (it runs them in parallel and returns a job), never a loop of act calls. "
@@ -224,7 +227,12 @@ def devices(op: Annotated[str, Field(description="list (default) | start | stop 
             return {"devices": [d.data for d in client().devices()]}
         if op in ("start", "stop") and device:
             d = client().device(_resolve(device))
-            return {"result": (d.start() if op == "start" else d.stop()).output or "ok"}
+            out: Dict[str, Any] = {"result": (d.start() if op == "start" else d.stop()).output or "ok"}
+            if op == "start":
+                note = _money_note()
+                if note:
+                    out["money"] = note   # tell the user: balance, hours left, top-up link
+            return out
         if op == "rename" and device:
             r = client().device(_resolve(device)).rename(label)
             _names.pop(_key.get() or "env", None)
@@ -493,6 +501,35 @@ def recipe(device: Device_,
         return {"error": _err(e)}
 
 
+def _money_note() -> Optional[Dict[str, Any]]:
+    """Balance warnings to attach to actions that spend money (start, fleet run); None when all is well or unknown."""
+    try:
+        b = client().balance()
+    except Exception:   # older gateway or no account key: actions go on without the note
+        return None
+    if not b.get("warnings"):
+        return None
+    return {"balance": b.get("balance"), "runs_out_in_hours": b.get("runs_out_in_hours"), "warnings": b.get("warnings"),
+            "top_up": b.get("top_up")}
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Account balance", readOnlyHint=True, openWorldHint=False))
+def account(op: Annotated[str, Field(description="balance")] = "balance", ctx: Optional[Context] = None) -> Dict[str, Any]:
+    """The account's money - check it before starting phones, creating them or launching long runs, and tell the user
+    what it says. op=balance: balance, spend_per_day (running per-minute phones + paid proxy traffic of the last 24 hours),
+    runs_out_in_hours, phones running per minute with their price, monthly renewals within 7 days, prices per hour / day
+    cap / month / GB by exit type, the top_up link, and warnings: show every warning to the user in plain words (e.g.
+    "about 6 hours left; at zero the phones stop and go to storage", "proxy traffic cost $3.40 today") with the top_up
+    link. When the balance is low, say so before spending more - do not silently start phones."""
+    _use(ctx)
+    try:
+        if op != "balance":
+            return {"error": "op is balance"}
+        return client().balance()
+    except ClousdError as e:
+        return {"error": _err(e)}
+
+
 def _devs(raw: str) -> list:
     raw = (raw or "").strip()
     if raw.startswith("["):
@@ -691,8 +728,12 @@ def fleet(op: Annotated[str, Field(description="recipes | run | status")],
             sg = [int(x) for x in stagger.replace(" ", "").split(",") if x] if stagger.strip() else None
             vb = {_resolve(k): v for k, v in json.loads(vars_by_device).items()} if vars_by_device.strip() else None
             j = c.run(names, st, stagger=sg, vars_by_device=vb, wait=False)
-            return {"job": j.id, "state": j.state or "running", "devices": names,
-                    "next": "call fleet op=status with this job every 30-60 s"}
+            out = {"job": j.id, "state": j.state or "running", "devices": names,
+                   "next": "call fleet op=status with this job every 30-60 s"}
+            note = _money_note()
+            if note:
+                out["money"] = note   # tell the user: balance, hours left, top-up link
+            return out
         return {"error": "op is recipes, run or status"}
     except (ClousdError, ValueError) as e:
         return {"error": _err(e)}

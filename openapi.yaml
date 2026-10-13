@@ -442,6 +442,15 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { platform: { type: string, enum: [com.facebook.katana, com.instagram.barcelona] } } } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /balance:
+    get:
+      summary: The account's money - balance, spend per day, hours left, renewals and warnings to show the user
+      description: >-
+        spend_per_day = running per-minute phones (hourly price up to the daily cap) + paid proxy traffic of the last 24 hours;
+        runs_out_in_hours = balance / spend; warnings are ready sentences (hours left, traffic cost, monthly renewals above the
+        balance, below the minimum to start). Check it before starting phones or long runs.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { balance: { type: string }, balance_cents: { type: integer }, spend_per_day: { type: string }, runs_out_in_hours: { type: [number, "null"] }, warnings: { type: array, items: { type: string } }, top_up: { type: string } } } } } }
   /jobs/{id}:
     parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
     get:

@@ -2,4 +2,4 @@
 from .client import Clousd, ClousdError, Device, Job
 
 __all__ = ["Clousd", "ClousdError", "Device", "Job"]
-__version__ = "0.3.1"
+__version__ = "0.3.2"

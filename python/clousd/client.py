@@ -118,6 +118,12 @@ class Clousd:
     def job(self, job_id: str) -> "Job":
         return Job(self, self.request("GET", f"jobs/{job_id}").get("job", {"id": job_id}))
 
+    def balance(self) -> Dict[str, Any]:
+        """The account's money: balance, spend_per_day (running per-minute phones + proxy traffic of the last 24 hours),
+        runs_out_in_hours, monthly renewals within 7 days, prices, top_up link and ready warnings to show the user.
+        Check it before starting phones or long runs."""
+        return self.request("GET", "balance")
+
     def usage(self) -> Dict[str, Any]:
         return self.request("GET", "usage")
 

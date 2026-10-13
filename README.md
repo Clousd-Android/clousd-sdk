@@ -220,7 +220,7 @@ model is typically 5 to 10 seconds.
 |---|---|
 | [`openapi.yaml`](openapi.yaml) | OpenAPI 3.1 description of the public API v1 (`https://api.clousd.com/v1`) |
 | [`python/`](python) | `clousd`: the Python client (devices, observe/act, snapshots, recipes, recording, ADB, jobs), `clousd.agent` (task loop on any OpenAI-compatible model), `clousd.bench`, `clousd.explore`, the `clousd` CLI |
-| [`mcp/`](mcp) | `clousd-mcp`: MCP server with nine tools (`devices`, `observe`, `act`, `inspect`, `snapshots`, `recipe`, `fleet`, `network`, `resources`), descriptions, result schemas and hints on every tool |
+| [`mcp/`](mcp) | `clousd-mcp`: MCP server with ten tools (`account`, `devices`, `observe`, `act`, `inspect`, `snapshots`, `recipe`, `fleet`, `network`, `resources`), descriptions, result schemas and hints on every tool |
 | [`docs/agent-loop.md`](docs/agent-loop.md) | How an agent drives a phone: the observe → act → verify loop, and the mistakes that cost the most time |
 | [`server.json`](server.json), [`smithery.yaml`](smithery.yaml) | Registry metadata: MCP registry entry `io.github.Clousd-Android/clousd-mcp` with the hosted endpoint |
 
@@ -246,6 +246,7 @@ model is typically 5 to 10 seconds.
 | `GET`/`POST /proxies`, `POST /proxies/{id}/bind`, `/rotate`, `/check`, `POST /proxies/unbind` | the account's proxies: add your own or a Clousd exit, put devices on it, new IP |
 | `GET`/`POST /accounts`, `POST /accounts/{id}/link`, `POST /accounts/{id}/via` | saved app accounts (never with passwords); Facebook / Threads through an Instagram account; a group signs in with `{"op":"login","account":<id>}` |
 | `GET`/`POST /texts`, `GET`/`POST /media`, `POST /media/send` | captions and comments, the photo and video library; a group publishes with `{"op":"publish","media_id":<id>}` |
+| `GET /balance` | the account's money: balance, spend per day (phones + proxy traffic), hours left, renewals, warnings to show the user |
 | `GET /jobs/{id}` | progress of long operations (for a group: `output` is JSON `{per_phone: {name: {state, steps}}}`) |
 
 Keys have a scope (`read` or `control`). Limits: 120 requests a minute per key and device, 600 a minute per key across

@@ -73,7 +73,7 @@ must carry a key, nothing is read from the environment. The hosted endpoint is a
 
 ## Tools
 
-Nine tools: a few large tools are easier for a model to choose from than dozens of small ones. Every tool has
+Ten tools: a few large tools are easier for a model to choose from than dozens of small ones. Every tool has
 parameter descriptions, a result schema and hints (read-only, destructive, idempotent), so clients and models pick
 the right one.
 
@@ -87,6 +87,7 @@ the right one.
 | `recipe` | run an app recipe on one phone (built-in flows such as login, warm-up, publish, or your own steps); record a new one from what is done on the phone and replay it without a model |
 | `network` | where phones go online: exit types and countries on sale, the account's proxies and the devices on each, add your own proxy or a Clousd exit, bind devices, new IP, check |
 | `resources` | saved app accounts (never with passwords), texts, the media library; add accounts and link them to phones, add Facebook / Threads that sign in through an Instagram account, upload files, copy them into phones' galleries |
+| `account` | the balance, spend per day (phones + proxy traffic), hours left, monthly renewals and warnings to tell the user; starts and fleet runs attach a money note when the balance is low |
 | `fleet` | many phones in one call: `recipes` lists the built-in recipes with their inputs, `run` starts a recipe or your steps on up to 32 phones in parallel (each with its own login via `vars_by_device`, starts spread with `stagger`) and returns a job, `status` shows per-phone progress |
 
 Screenshots come back 540 px wide (`CLOUSD_SHOT_WIDTH` to change). Act on an element by its number from the last

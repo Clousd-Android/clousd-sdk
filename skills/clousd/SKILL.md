@@ -6,8 +6,8 @@ description: Drive real Android cloud phones on Clousd - list and start phones, 
 # Clousd: real Android phones for agents
 
 Clousd phones are real Android devices in the cloud (Google Play inside, own network exit, SIM and time zone per phone).
-You reach them through the Clousd MCP server (tools `devices`, `fleet`, `network`, `resources`, `observe`, `act`,
-`inspect`, `snapshots`, `recipe`) or the REST API `https://api.clousd.com/v1` with `Authorization: Bearer cl_live_...`.
+You reach them through the Clousd MCP server (tools `account`, `devices`, `fleet`, `network`, `resources`, `observe`,
+`act`, `inspect`, `snapshots`, `recipe`) or the REST API `https://api.clousd.com/v1` with `Authorization: Bearer cl_live_...`.
 
 ## Setup (once)
 
@@ -23,6 +23,11 @@ Never print the key back in full, never store it in a project file.
 
 ## How to work
 
+0. **Money first.** `account op=balance` before starting phones, creating them or launching long runs. Tell the user
+   the balance, how many hours it lasts at the current spend and every `warnings` line (proxy traffic cost, monthly
+   renewals, "at zero the phones stop and go to storage") with the `top_up` link. Actions that spend money return a
+   `money` note when the balance is low - always pass it on, and ask before spending more when hours left are few.
+   Own proxies cost nothing; Clousd residential / mobile exits are billed per GB.
 1. **Look first.** `devices op=list`: every phone has a `label` (the name the user sees, e.g. "Anna IG" or "Pixel 7 #3"),
    a `number`, its `accounts` and `proxy_id`. Refer to phones by label or number - every tool accepts them.
 2. **Recipes before taps.** For app tasks call `fleet op=recipes` and run the matching recipe (`login`, `warm`,
