@@ -61,6 +61,14 @@ class Fake(BaseHTTPRequestHandler):
                                     "image": {"w": 540, "h": 1200, "format": "jpeg", "data": base64.b64encode(b"JPEGDATA").decode()},
                                     "package": "com.android.settings", "activity": "com.android.settings.Settings",
                                     "ui": [{"text": "Wi-Fi", "class": "TextView", "b": [0, 100, 540, 200], "click": True}]})
+        if p == "/v1/recipes":
+            return self._send(200, {"recipes": [
+                {"package": "com.instagram.android", "app": "Instagram", "action": "warm", "inputs": [], "status": "tested"},
+                {"package": "com.reddit.frontpage", "app": "Reddit", "action": "login", "inputs": [], "status": "beta"}]})
+        if p == "/v1/jobs/g1":
+            out = {"per_phone": {"t1": {"state": "done", "steps": [{"op": "recipe", "ok": True}]},
+                                 "t2": {"state": "failed", "steps": [{"op": "recipe", "ok": False, "output": "no feed"}]}}}
+            return self._send(200, {"job": {"id": "g1", "state": "failed", "output": json.dumps(out)}})
         if p == "/v1/jobs/j1":
             Fake.job_polls += 1
             return self._send(200, {"job": {"id": "j1", "state": "done" if Fake.job_polls >= 2 else "running"}})
@@ -79,6 +87,8 @@ class Fake(BaseHTTPRequestHandler):
         if p == "/v1/devices/t1/act":
             return self._send(200, {"ok": True, "output": "", "seq": 7, "stale": body.get("seq", 7) != 7,
                                     "settled": True, "waited_ms": 600})
+        if p == "/v1/groups":
+            return self._send(202, {"ok": True, "job": {"id": "g1", "state": "running"}})
         if p == "/v1/devices/t1/snapshots/v3/restore":
             return self._send(202, {"ok": True, "job": {"id": "j1", "state": "running"}})
         return self._send(400, {"error": "bad_request", "message": "op"})
@@ -132,6 +142,22 @@ class ClientTest(unittest.TestCase):
         r = d.act("tap", x=270, y=150, seq=o["seq"])
         self.assertEqual(Fake.calls[-1][2], {"op": "tap", "settle": True, "x": 270, "y": 150, "seq": 7})
         self.assertEqual((r["settled"], r["stale"]), (True, False))
+
+    def test_recipes_filter(self):
+        self.assertEqual([r["action"] for r in self.c.recipes("instagram")], ["warm"])
+        self.assertEqual(len(self.c.recipes()), 2)
+
+    def test_run_recipe_on_many(self):
+        job = self.c.run_recipe(["t1", self.c.device("t2")], "com.instagram.android", "warm", {"seconds": 900},
+                                stagger=[10, 30], vars_by_device={"t2": {"comments": "Nice"}}, timeout=30)
+        body = [c for c in Fake.calls if c[1] == "/v1/groups"][-1][2]
+        self.assertEqual(body, {"phones": ["t1", "t2"], "stagger": [10, 30],
+                                "steps": [{"op": "recipe", "package": "com.instagram.android", "action": "warm",
+                                           "vars": {"seconds": "900"}}],
+                                "vars_by_phone": {"t2": {"comments": "Nice"}}})
+        self.assertEqual(job.state, "failed")   # one phone failed: no exception, the per-device result tells
+        self.assertEqual(job.failed, ["t2"])
+        self.assertEqual(job.results["t1"]["state"], "done")
 
     def test_type_any_language(self):
         self.c.device("t1").type("こんにちは")

@@ -45,6 +45,7 @@ phone.wait_text("Berlin", timeout=30)          # check
 | `observe(width, ui)`, `screenrecord(seconds)` | `act(op, settle, seq, ...)`, `long_press(x, y, ms)` | `recipe(...)` |
 | `notifications()`, `clipboard_get()` | `intent(action, data, ...)`, `settings("wifi")` | `record_start()` / `record_stop()` |
 | `app_info(pkg)`, `crashes(pkg)`, `health()` | `clipboard_set(text)`, `notifications_open()` / `_clear()` | |
+| `c.recipes(app)` | `c.run(devices, steps)`, `c.run_recipe(devices, pkg, action, vars)` | `job.results`, `job.failed` |
 
 Coordinates are device pixels (`size()` gives the screen). Long operations return a `Job`; they wait by default,
 pass `wait=False` to poll yourself. Errors raise `ClousdError` with the HTTP status, a short code and a message.
@@ -52,6 +53,36 @@ The API allows 60 requests a minute per key; the client waits and retries on 429
 
 For checks from inside the phone (app databases, files, `dumpsys`) open an ADB session to the device from the
 dashboard or `POST /v1/devices/{name}/adb`.
+
+## Many phones at once
+
+A recipe runs an app flow (sign in, warm up, publish, delete the last post) without a model; `run_recipe` and `run`
+start it on up to 32 phones in parallel, wherever they live, and return one `Job` with a result per phone.
+
+```python
+from clousd import Clousd
+
+c = Clousd()
+phones = [d for d in c.devices() if d.state == "running"]       # 10 phones, any servers
+
+for r in c.recipes("instagram"):                               # what can run without a model
+    print(r["action"], "-", r["about"], [i["name"] for i in r["inputs"]])
+
+# sign every phone into its own account: one call, the phones work in parallel
+accounts = {"dev_01": {"login": "anna.k", "password": "..."}, "dev_02": {"login": "mark_t", "password": "..."}}
+job = c.run_recipe(list(accounts), "com.instagram.android", "login", vars_by_device=accounts)
+print(job.failed)                                             # [] - or the devices to look at
+
+# warm all ten up for 15 minutes, starts spread over 20-90 s so they do not move in lockstep
+job = c.run_recipe(phones, "com.instagram.android", "warm",
+                   {"seconds": 900, "comment_chance": 0.1, "comments": "Love this|So good|Wow"}, stagger=[20, 90])
+for name, r in job.results.items():
+    print(name, r["state"], r["steps"][-1]["output"])
+```
+
+`c.run(phones, steps)` takes your own chain of steps instead of a recipe (`open_app`, `url`, `tap_text`, `wait_text`,
+`wait`, `browse`, `scroll`, `install_app`, `rotate`, `recipe`, ...). With `wait=False` it returns at once; poll
+`c.job(job.id).refresh()` yourself.
 
 ## Give a phone a task
 

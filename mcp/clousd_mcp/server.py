@@ -1,6 +1,6 @@
 """MCP server for CLOUSD cloud phones: gives any MCP-capable agent a real Android phone to look at and act on.
 
-Six tools (a few large tools are easier for a model to choose from than dozens of small ones):
+Seven tools (a few large tools are easier for a model to choose from than dozens of small ones):
   devices   - list the phones this key can use, start or stop one
   observe   - the screen as an image with a number on every element, plus the elements as text
   act       - tap (by element number or point), long_press, swipe, scroll, type, key, open_app, close_app, open_url,
@@ -8,6 +8,7 @@ Six tools (a few large tools are easier for a model to choose from than dozens o
   inspect   - read without touching the screen: notifications, clipboard, app info, crashes, health, installed apps
   snapshots - list, save, restore (reset between runs) or clone a phone
   recipe    - run an app recipe (built-in or your own steps) and record new ones from what is done on the phone
+  fleet     - many phones in one call: list the built-in recipes, run a recipe or steps on up to 32 phones, follow progress
 
 Screenshots come back `SHOT_WIDTH` px wide (540: ~1200 px long side on a 1080x2400 phone). act takes an element
 number from the last observe, or coordinates in that screenshot; both are converted to the device here.
@@ -48,9 +49,12 @@ def shot_width() -> int:
     w = _width.get() or SHOT_WIDTH
     return max(240, min(int(w), 1080))
 
-mcp = _Server("clousd", instructions="Real Android phones in the cloud. Call observe before acting and act on element "
-              "numbers from it; use inspect to read notifications, app versions or crashes without touching the screen; "
-              "use snapshots restore to start each run from the same state.")
+mcp = _Server("clousd", instructions="Real Android phones in the cloud. For app tasks (sign in, warm up an account, "
+              "publish, delete a post) first look at fleet op=recipes and run a recipe - it waits for the right screens and "
+              "handles popups; tap step by step with observe/act only when no recipe fits. For several phones use one "
+              "fleet op=run for all of them (it runs them in parallel and returns a job), never a loop of act calls. "
+              "Call observe before acting and act on element numbers from it; use inspect to read notifications, app "
+              "versions or crashes without touching the screen; use snapshots restore to start each run from the same state.")
 _clients: Dict[str, Clousd] = {}   # API key → client (one per key; the remote server serves many keys)
 _key: contextvars.ContextVar = contextvars.ContextVar("clousd_key", default="")
 _scale: Dict[str, float] = {}      # device → device pixels per screenshot pixel
@@ -413,8 +417,9 @@ def recipe(device: Device_,
            steps: Annotated[str, Field(description="run: your own recipe as JSON {app, steps:[...]} (e.g. a recorded draft)")] = "",
            vars: Annotated[str, Field(description='run: variables as JSON, e.g. {"seconds": "300"}')] = "",
            ctx: Optional[Context] = None) -> Dict[str, Any]:
-    """App recipes: scripted flows that wait for the right screen at each step, deal with popups and report what they
-    did. op=run runs a built-in recipe (package + action) or your own JSON and returns when it is finished.
+    """App recipes on one phone: scripted flows that wait for the right screen at each step, deal with popups and report
+    what they did. op=run runs a built-in recipe (package + action - the list with inputs is fleet op=recipes) or your own
+    JSON and returns when it is finished; for several phones use fleet op=run instead.
     op=record_start begins recording what is done on the phone (through act, or by a person in the live view);
     record_status shows progress; record_stop returns the recorded draft recipe, ready for op=run."""
     _use(ctx)
@@ -436,6 +441,85 @@ def recipe(device: Device_,
         if op == "record_stop":
             return d.record_stop()
         return {"error": "op is run, record_start, record_status or record_stop"}
+    except (ClousdError, ValueError) as e:
+        return {"error": _err(e)}
+
+
+def _fleet_summary(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Job of a fleet run → state plus one short line per device (last step, ok or the error)."""
+    try:
+        per = json.loads(job.get("output") or "{}").get("per_phone", {}) or {}
+    except ValueError:
+        per = {}
+    devices: Dict[str, Any] = {}
+    for name, r in per.items():
+        steps = r.get("steps") or []
+        last = steps[-1] if steps else {}
+        devices[name] = {"state": r.get("state", ""), "steps_done": len(steps),
+                         "last": (last.get("op", "") + ": " + str(last.get("output", ""))[-200:]) if last else ""}
+    counts: Dict[str, int] = {}
+    for d in devices.values():
+        counts[d["state"]] = counts.get(d["state"], 0) + 1
+    return {"job": job.get("id", ""), "state": job.get("state", ""), "counts": counts, "devices": devices}
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Many phones at once", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True))
+def fleet(op: Annotated[str, Field(description="recipes | run | status")],
+          app: Annotated[str, Field(description="recipes: filter by app name or package, e.g. instagram")] = "",
+          devices: Annotated[str, Field(description='run: device names as JSON list or comma-separated, e.g. ["dev_1","dev_2"]; "all" = every running device of this key')] = "",
+          package: Annotated[str, Field(description="run: app package of the recipe, e.g. com.instagram.android")] = "",
+          action: Annotated[str, Field(description="run: recipe action from op=recipes, e.g. warm, login, publish_post")] = "",
+          vars: Annotated[str, Field(description='run: variables for every device as JSON, e.g. {"seconds": "900", "comment_chance": "0.1"}')] = "",
+          vars_by_device: Annotated[str, Field(description='run: per-device variables as JSON, e.g. {"dev_1": {"login": "anna", "password": "..."}} (logins differ per phone)')] = "",
+          steps: Annotated[str, Field(description='run: instead of a recipe, your own steps as JSON list, e.g. [{"op":"open_app","package":"com.android.chrome"},{"op":"wait","seconds":5}]')] = "",
+          stagger: Annotated[str, Field(description="run: spread the starts, min,max seconds, e.g. 20,90 (phones do not act in lockstep)")] = "",
+          job: Annotated[str, Field(description="status: job id returned by op=run")] = "",
+          ctx: Optional[Context] = None) -> Dict[str, Any]:
+    """Work with many phones in one call - the way to automate, instead of tapping each phone step by step.
+    op=recipes lists the built-in app recipes (sign in, warm up an account, publish, delete the last post...) with their
+    inputs; prefer a recipe over act whenever one fits the task. op=run starts a recipe (package + action) or your own
+    steps on up to 32 phones at once (they may live on different servers) and returns a job id right away - the phones
+    work in parallel, minutes to an hour for a warm-up. op=status with job shows per-phone progress: call it every
+    30-60 s until state is done or failed. Steps for op=run: recipe (package, action, vars), open_app / close_app
+    (package), url (url), tap_text / wait_text (text, seconds), wait (seconds, seconds_max), scroll (text=down|up),
+    browse (seconds 10-600: scroll like a person), install_app (package from the catalog), key (key), screenshot,
+    rotate (new IP), if_text / unless_text (text, skip)."""
+    _use(ctx)
+    try:
+        c = client()
+        if op == "recipes":
+            return {"recipes": c.recipes(app)}
+        if op == "status":
+            if not job:
+                return {"error": "status needs job (from op=run)"}
+            return _fleet_summary(c.job(job).data)
+        if op == "run":
+            raw = devices.strip()
+            if raw == "all":
+                names = [d.name for d in c.devices() if d.data.get("state") == "running"]
+            elif raw.startswith("["):
+                names = [str(x) for x in json.loads(raw)]
+            else:
+                names = [x.strip() for x in raw.split(",") if x.strip()]
+            if not names:
+                return {"error": "run needs devices (names, or \"all\")"}
+            if len(names) > 32:
+                return {"error": f"{len(names)} devices: at most 32 per run - split into several runs"}
+            if steps.strip():
+                st = json.loads(steps)
+                if not isinstance(st, list):
+                    return {"error": "steps must be a JSON list"}
+            elif package and action:
+                v = json.loads(vars) if vars.strip() else {}
+                st = [{"op": "recipe", "package": package, "action": action, "vars": {k: str(x) for k, x in v.items()}}]
+            else:
+                return {"error": "run needs package + action (see op=recipes), or steps"}
+            sg = [int(x) for x in stagger.replace(" ", "").split(",") if x] if stagger.strip() else None
+            vb = json.loads(vars_by_device) if vars_by_device.strip() else None
+            j = c.run(names, st, stagger=sg, vars_by_device=vb, wait=False)
+            return {"job": j.id, "state": j.state or "running", "devices": names,
+                    "next": "call fleet op=status with this job every 30-60 s"}
+        return {"error": "op is recipes, run or status"}
     except (ClousdError, ValueError) as e:
         return {"error": _err(e)}
 

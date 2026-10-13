@@ -59,6 +59,8 @@ The phone stays the same whatever you plug in. A new model release is a free upg
 
 **Scale the fleet**
 - Start with one phone, run hundreds; stopped phones cost nothing
+- One call runs a recipe or a chain of steps on up to 32 phones in parallel (`POST /groups`, `c.run_recipe(...)`, MCP
+  `fleet`), each phone with its own login or caption, starts spread so the phones do not act in lockstep
 - Groups and schedules in the dashboard, jobs and webhooks in the API
 - Benchmark harness: run AndroidWorld-style task sets on real device models with any model behind the loop
 
@@ -142,6 +144,36 @@ clousd bench --device dev_04f2 --model-url ...              # the built-in task 
 clousd explore com.android.settings --device dev_04f2       # map the screens of an app, draft an app pack
 ```
 
+### Many phones at once
+
+An agent that taps every phone step by step through `observe`/`act` is slow and burns model calls. For app tasks use a
+recipe, and for many phones one call:
+
+```python
+from clousd import Clousd
+
+c = Clousd()
+phones = [d for d in c.devices() if d.state == "running"]       # 10 phones, any servers
+
+for r in c.recipes("instagram"):                               # what can run without a model
+    print(r["action"], "-", r["about"], [i["name"] for i in r["inputs"]])
+
+# sign every phone into its own account: one call, the phones work in parallel
+accounts = {"dev_01": {"login": "anna.k", "password": "..."}, "dev_02": {"login": "mark_t", "password": "..."}}
+job = c.run_recipe(list(accounts), "com.instagram.android", "login", vars_by_device=accounts)
+print(job.failed)                                             # [] - or the devices to look at
+
+# warm all ten up for 15 minutes, starts spread over 20-90 s so they do not move in lockstep
+job = c.run_recipe(phones, "com.instagram.android", "warm",
+                   {"seconds": 900, "comment_chance": 0.1, "comments": "Love this|So good|Wow"}, stagger=[20, 90])
+for name, r in job.results.items():
+    print(name, r["state"], r["steps"][-1]["output"])
+```
+
+Over MCP the same is the `fleet` tool: `fleet op=recipes app=instagram`, then `fleet op=run devices=all
+package=com.instagram.android action=warm vars={"seconds":"900"} stagger=20,90`, then `fleet op=status job=...` until
+it is done. Over HTTPS it is `GET /v1/recipes` and `POST /v1/groups` (below).
+
 ### Plain HTTPS
 
 ```bash
@@ -149,6 +181,11 @@ curl -H "Authorization: Bearer cl_live_..." https://api.clousd.com/v1/devices
 curl -H "Authorization: Bearer cl_live_..." "https://api.clousd.com/v1/devices/dev_04f2/observe?w=540"
 curl -H "Authorization: Bearer cl_live_..." -H "Content-Type: application/json" \
      -d '{"op":"tap_text","text":"Search","settle":true}' https://api.clousd.com/v1/devices/dev_04f2/act
+curl -H "Authorization: Bearer cl_live_..." https://api.clousd.com/v1/recipes
+curl -H "Authorization: Bearer cl_live_..." -H "Content-Type: application/json" \
+     -d '{"phones":["dev_01","dev_02"],"stagger":[20,90],
+          "steps":[{"op":"recipe","package":"com.instagram.android","action":"warm","vars":{"seconds":"900"}}]}' \
+     https://api.clousd.com/v1/groups                      # -> 202 {"job":{"id":...}}; GET /v1/jobs/{id} for progress
 ```
 
 ## What a session looks like
@@ -172,7 +209,7 @@ model is typically 5 to 10 seconds.
 |---|---|
 | [`openapi.yaml`](openapi.yaml) | OpenAPI 3.1 description of the public API v1 (`https://api.clousd.com/v1`) |
 | [`python/`](python) | `clousd`: the Python client (devices, observe/act, snapshots, recipes, recording, ADB, jobs), `clousd.agent` (task loop on any OpenAI-compatible model), `clousd.bench`, `clousd.explore`, the `clousd` CLI |
-| [`mcp/`](mcp) | `clousd-mcp`: MCP server with six tools (`devices`, `observe`, `act`, `inspect`, `snapshots`, `recipe`), descriptions, result schemas and hints on every tool |
+| [`mcp/`](mcp) | `clousd-mcp`: MCP server with seven tools (`devices`, `observe`, `act`, `inspect`, `snapshots`, `recipe`, `fleet`), descriptions, result schemas and hints on every tool |
 | [`docs/agent-loop.md`](docs/agent-loop.md) | How an agent drives a phone: the observe → act → verify loop, and the mistakes that cost the most time |
 | [`server.json`](server.json), [`smithery.yaml`](smithery.yaml) | Registry metadata: MCP registry entry `io.github.Clousd-Android/clousd-mcp` with the hosted endpoint |
 
@@ -189,10 +226,12 @@ model is typically 5 to 10 seconds.
 | `GET /devices/{name}/screenrecord?seconds=N` | mp4 of the screen, 1 to 60 seconds (control keys) |
 | `POST /devices/{name}/recipe` | run an app recipe: built-in (`package`, `action`) or your own steps (`recipe`), `async` for a job, `cancel` to stop |
 | `GET`/`POST /devices/{name}/record` | record a recipe from what is done on the phone: `start`, `status`, `stop` (returns the draft) |
+| `GET /recipes` | built-in app recipes: package, action, what it does, its inputs, `tested` or `beta` |
+| `POST /groups` | the same steps on up to 32 phones in parallel: `{phones, steps, stagger:[min,max], vars_by_phone}`; steps `recipe`, `open_app`, `url`, `tap_text`, `wait_text`, `wait`, `browse`, `scroll`, `install_app`, `rotate`, `if_text`, ...; answers `202` with a job whose output has per-phone progress |
 | `GET`/`POST /devices/{name}/network`, `POST …/network/rotate` | which exit the phone uses; switch country or type; new IP |
 | `GET`/`POST`/`DELETE /devices/{name}/adb` | ADB over a relay: one-time code, IP allow-list, expiry |
 | `GET`/`POST /devices/{name}/snapshots`, `POST …/snapshots/{id}/restore`, `…/clone` | saved states: reset between runs, or clone a phone from a state |
-| `GET /jobs/{id}` | progress of long operations |
+| `GET /jobs/{id}` | progress of long operations (for a group: `output` is JSON `{per_phone: {name: {state, steps}}}`) |
 
 Keys have a scope (`read` or `control`). Limits: 120 requests a minute per key and device, 600 a minute per key across
 devices, 60 a minute for everything else; the server answers `429` with `Retry-After` and the Python client waits and

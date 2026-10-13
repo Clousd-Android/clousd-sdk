@@ -118,6 +118,48 @@ class Clousd:
         """Phone models available to create devices from."""
         return self.request("GET", "models").get("models", [])
 
+    # -- many devices at once -----------------------------------------------------------------------------------
+    def recipes(self, app: str = "") -> List[Dict[str, Any]]:
+        """Built-in app recipes: package, app, action, about, inputs [{name, about, required}], status (tested | beta).
+        `app` filters by app name or package (case-insensitive substring)."""
+        rows = self.request("GET", "recipes").get("recipes", [])
+        if app:
+            a = app.lower()
+            rows = [r for r in rows if a in str(r.get("app", "")).lower() or a in str(r.get("package", "")).lower()]
+        return rows
+
+    def run(self, devices: List[Any], steps: List[Dict[str, Any]], stagger: Optional[List[int]] = None,
+            vars_by_device: Optional[Dict[str, Dict[str, Any]]] = None, wait: bool = True,
+            timeout: float = 6 * 3600) -> "Job":
+        """Run the same steps on many devices at once (up to 32 per call; they may live on different servers).
+        Steps are dicts like {"op": "recipe", "package": "com.instagram.android", "action": "warm", "vars": {...}},
+        {"op": "open_app", "package": ...}, {"op": "wait", "seconds": 5}, {"op": "tap_text", "text": "Allow"}.
+        `stagger` [min, max] seconds spreads the starts so the phones do not act in lockstep.
+        `vars_by_device` gives each device its own recipe variables (its login and password, its caption):
+        {"dev_1": {"login": "anna", "password": "..."}, ...} - merged over the step's vars. Passwords never appear in output.
+        Returns the Job; its `results` maps device → {state: done | failed, steps: [{op, ok, output, took_s}]}.
+        A failed device does not raise - check `job.results` (or `job.failed`)."""
+        names = [d.name if isinstance(d, Device) else str(d) for d in devices]
+        body: Dict[str, Any] = {"phones": names, "steps": steps}
+        if stagger:
+            body["stagger"] = list(stagger)
+        if vars_by_device:
+            body["vars_by_phone"] = {(k.name if isinstance(k, Device) else str(k)): {a: str(b) for a, b in v.items()}
+                                     for k, v in vars_by_device.items()}
+        job = Job(self, self.request("POST", "groups", json=body).get("job", {}))
+        return job.wait(timeout, raise_on_fail=False) if wait else job
+
+    def run_recipe(self, devices: List[Any], package: str, action: str, vars: Optional[Dict[str, Any]] = None,
+                   stagger: Optional[List[int]] = None, vars_by_device: Optional[Dict[str, Dict[str, Any]]] = None,
+                   wait: bool = True, timeout: float = 6 * 3600) -> "Job":
+        """One built-in recipe on many devices at once, e.g.
+            run_recipe(phones, "com.instagram.android", "warm", {"seconds": 900, "comment_chance": 0.1}, stagger=[20, 90])
+            run_recipe(phones, "com.instagram.android", "login", vars_by_device={"dev_1": {"login": ..., "password": ...}})
+        Names, actions and inputs: recipes()."""
+        step: Dict[str, Any] = {"op": "recipe", "package": package, "action": action,
+                                "vars": {k: str(v) for k, v in (vars or {}).items()}}
+        return self.run(devices, [step], stagger=stagger, vars_by_device=vars_by_device, wait=wait, timeout=timeout)
+
     def _job(self, resp: Dict[str, Any], wait: bool, timeout: float) -> "Job":
         job = Job(self, resp.get("job") or {"state": "done", "output": resp.get("output", "")})
         return job.wait(timeout) if wait else job
@@ -138,17 +180,31 @@ class Job:
             self.data = self.client.request("GET", f"jobs/{self.id}").get("job", self.data)
         return self
 
-    def wait(self, timeout: float = 900, every: float = 3.0) -> "Job":
-        """Poll until the job finishes; raises ClousdError if it failed or ran out of time."""
+    def wait(self, timeout: float = 900, every: float = 3.0, raise_on_fail: bool = True) -> "Job":
+        """Poll until the job finishes; raises ClousdError if it ran out of time, or failed (unless raise_on_fail=False)."""
         end = time.time() + timeout
         while self.state == "running" and self.id:
             if time.time() > end:
                 raise ClousdError(408, "timeout", f"job {self.id} still running after {int(timeout)} s")
             time.sleep(every)
             self.refresh()
-        if self.state == "failed":
+        if self.state == "failed" and raise_on_fail:
             raise ClousdError(500, "job_failed", self.output.strip()[-500:])
         return self
+
+    @property
+    def results(self) -> Dict[str, Any]:
+        """For a job from run()/run_recipe(): device → {state: waiting | running | done | failed, steps: [...]}."""
+        try:
+            import json as _json
+            return _json.loads(self.output or "{}").get("per_phone", {}) or {}
+        except ValueError:
+            return {}
+
+    @property
+    def failed(self) -> List[str]:
+        """Devices whose steps failed (run()/run_recipe())."""
+        return [d for d, r in self.results.items() if r.get("state") == "failed"]
 
     def __repr__(self) -> str:
         return f"<Job {self.id} {self.state}>"

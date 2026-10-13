@@ -73,7 +73,7 @@ must carry a key, nothing is read from the environment. The hosted endpoint is a
 
 ## Tools
 
-Six tools: a few large tools are easier for a model to choose from than dozens of small ones. Every tool has
+Seven tools: a few large tools are easier for a model to choose from than dozens of small ones. Every tool has
 parameter descriptions, a result schema and hints (read-only, destructive, idempotent), so clients and models pick
 the right one.
 
@@ -84,11 +84,28 @@ the right one.
 | `act` | `tap` / `long_press` (by element number or point), `swipe`, `scroll`, `tap_text`, `wait_text`, `type`, `key`, `open_app`, `close_app`, `open_url`, `intent`, `settings`, `clipboard_set`, `notifications_open` / `_close` / `_clear`, `installed`; waits until the screen settles and refuses an action taken on a stale screen |
 | `inspect` | read without touching the screen: `notifications`, `clipboard`, `app` (version, install time, running), `crashes` (app crashes, native crashes, ANRs), `health`, `installed` |
 | `snapshots` | list, save, restore (reset between runs) or clone a phone with its own identity |
-| `recipe` | run an app recipe (built-in flows such as login, warm-up, publish, or your own steps); record a new one from what is done on the phone and replay it without a model |
+| `recipe` | run an app recipe on one phone (built-in flows such as login, warm-up, publish, or your own steps); record a new one from what is done on the phone and replay it without a model |
+| `fleet` | many phones in one call: `recipes` lists the built-in recipes with their inputs, `run` starts a recipe or your steps on up to 32 phones in parallel (each with its own login via `vars_by_device`, starts spread with `stagger`) and returns a job, `status` shows per-phone progress |
 
 Screenshots come back 540 px wide (`CLOUSD_SHOT_WIDTH` to change). Act on an element by its number from the last
 `observe`: the most reliable way to press a button. Coordinates, when needed, are in that image and the server scales
 them to the phone. Typing goes through the input method and works in any language and in password fields.
+
+## Automate, do not tap
+
+Tapping through `observe` -> `act` is for exploring and for screens no recipe covers. For a known app task the agent
+should run a recipe, and for several phones one `fleet` call, not a loop:
+
+```
+fleet op=recipes app=instagram                      -> login, warm, publish_post, publish_story, delete_last_post
+fleet op=run devices=all package=com.instagram.android action=warm
+          vars={"seconds":"900","comment_chance":"0.1"} stagger=20,90
+                                                    -> {"job": "j_8a1c", "devices": [10 phones]}
+fleet op=status job=j_8a1c                          -> {"counts": {"running": 7, "done": 3}, "devices": {...}}
+```
+
+Signing ten accounts in at once: `fleet op=run devices=["dev_01","dev_02",...] package=com.instagram.android
+action=login vars_by_device={"dev_01":{"login":"anna.k","password":"..."}, ...}`. Passwords never appear in the output.
 
 ## What a session looks like
 

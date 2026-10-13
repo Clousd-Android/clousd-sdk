@@ -262,6 +262,65 @@ paths:
       summary: What can be chosen when creating a device right now - exit types on sale, countries, plans (cached 60 s)
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: object, properties: { types: { type: array, items: { type: string } }, countries: { type: array, items: { type: object, properties: { code: { type: string }, name: { type: string } } } }, plans: { type: array, items: { type: string } }, updated: { type: string, format: date-time } } } } } }
+  /recipes:
+    get:
+      summary: Built-in app recipes - what an agent can run without tapping step by step
+      description: >-
+        One row per recipe: package and app name, action (warm, login, login_via, signup_via, publish_post, publish_story,
+        publish_video, delete_last_post), what it does, its inputs (vars) and status - tested on live accounts or beta.
+        Run one with POST /devices/{name}/recipe, or on many phones at once with POST /groups.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  recipes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        package: { type: string, example: com.instagram.android }
+                        app: { type: string, example: Instagram }
+                        action: { type: string, example: warm }
+                        about: { type: string }
+                        inputs: { type: array, items: { type: object, properties: { name: { type: string }, about: { type: string }, required: { type: boolean } } } }
+                        status: { type: string, enum: [tested, beta] }
+  /groups:
+    post:
+      summary: The same steps on many phones at once (up to 32, any servers), in parallel
+      description: >-
+        Starts a job and answers 202 right away. Every phone runs the steps on its own; `stagger` [min, max] seconds spreads
+        the starts so the phones do not act in lockstep. `vars_by_phone` gives each phone its own recipe variables (its login
+        and password, its caption), merged over the step's vars; passwords never appear in the output. Progress: GET /jobs/{id},
+        whose `output` is JSON {"per_phone": {name: {state: waiting|running|done|failed, steps: [{op, ok, output, took_s}]}}}.
+        A job ends `failed` when any phone failed - the others still finish. Steps: recipe {package, action, vars, seconds},
+        open_app / close_app {package}, url {url}, tap_text / find_text {text}, wait_text {text, seconds}, wait {seconds,
+        seconds_max}, browse {seconds 10-600}, scroll {text: down|up}, tap / swipe {x, y, x2, y2} or {fx, fy} (screen fractions),
+        text {text}, key {key}, install_app {package from GET /apps}, if_text / unless_text {text, skip}, screenshot, start,
+        stop, restart, rotate (new IP), profile_save.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phones, steps]
+              properties:
+                phones: { type: array, items: { type: string }, minItems: 1, maxItems: 32 }
+                steps: { type: array, minItems: 1, maxItems: 20, items: { type: object, required: [op], properties: { op: { type: string }, package: { type: string }, action: { type: string }, text: { type: string }, seconds: { type: integer }, vars: { type: object, additionalProperties: { type: string } } } } }
+                stagger: { type: array, items: { type: integer }, minItems: 2, maxItems: 2, description: "[min, max] seconds between starts, max 600" }
+                vars_by_phone: { type: object, additionalProperties: { type: object, additionalProperties: { type: string } } }
+            example:
+              phones: [dev_01, dev_02, dev_03]
+              stagger: [20, 90]
+              steps: [{ op: recipe, package: com.instagram.android, action: warm, vars: { seconds: "900", comment_chance: "0.1" } }]
+      responses:
+        "202": { description: Started, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, job: { $ref: "#/components/schemas/Job" } } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
   /jobs/{id}:
     parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
     get:
