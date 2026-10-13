@@ -427,6 +427,21 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { ids: { type: array, items: { type: integer } }, devices: { type: array, items: { type: string } } } } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /devices/{name}/label:
+    post:
+      summary: Give a phone a name people and agents can tell apart ("Anna IG"); empty = back to "Model #N"
+      parameters: [{ $ref: "#/components/parameters/name" }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { label: { type: string, maxLength: 40 } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { label: { type: string }, own_label: { type: [string, "null"] } } } } } }
+  /accounts/{id}/via:
+    post:
+      summary: Facebook or Threads that signs in through this Instagram account - no password, always on the Instagram's phone
+      description: A group login step with it runs the sign-in through Instagram; a Facebook not registered yet is created through Instagram.
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { platform: { type: string, enum: [com.facebook.katana, com.instagram.barcelona] } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
   /jobs/{id}:
     parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
     get:

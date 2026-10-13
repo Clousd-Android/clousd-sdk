@@ -84,9 +84,18 @@ class Clousd:
         """A handle to one device (no request is made until you use it)."""
         return Device(self, name)
 
+    def find(self, label: str) -> "Device":
+        """A device by the name people see in the dashboard ("Anna IG", "Pixel 7 #3", case-insensitive), its number or
+        its API name. Raises ClousdError 404 when nothing matches."""
+        want = str(label).strip().lower().lstrip("#")
+        for d in self.devices():
+            if want in (d.name.lower(), str(d.data.get("label") or "").lower(), str(d.data.get("number") or "")):
+                return d
+        raise ClousdError(404, "no_such_device", f"no device named {label!r}")
+
     def create_device(self, profile: str, network: Optional[Dict[str, Any]] = None, plan: str = "metered",
                       idempotency_key: Optional[str] = None, region: Optional[str] = None, burner: bool = False,
-                      wait: bool = True, timeout: float = 600) -> "Device":
+                      label: str = "", wait: bool = True, timeout: float = 600) -> "Device":
         """Create one device on this account (charged like the dashboard: creation fee, first month for plan monthly,
         paid exits metered per GB). `profile` from models(); `network` like {"type": "residential", "country": "US"} or
         {"type": "byo", "url": "socks5://…"}; `idempotency_key` - a retry with the same key within 10 minutes is not
@@ -96,6 +105,8 @@ class Clousd:
                                 "idempotency_key": idempotency_key or uuid.uuid4().hex}
         if region:
             body["region"] = region
+        if label:
+            body["label"] = label
         r = self.request("POST", "devices", json=body, timeout=90)
         d = Device(self, r["name"], {"name": r["name"], "state": r.get("state", "starting")})
         if wait:
@@ -211,6 +222,12 @@ class Clousd:
         """Link an account to a phone (one account per app per phone), or unlink with device=None."""
         dev = device.name if isinstance(device, Device) else device
         return self.request("POST", f"accounts/{int(account_id)}/link", json={"device": dev})
+
+    def add_via_instagram(self, instagram_id: int, platform: str) -> Dict[str, Any]:
+        """Facebook (com.facebook.katana) or Threads (com.instagram.barcelona) that signs in through this Instagram account:
+        no password, always on the Instagram's phone; a group login step with it runs the sign-in through Instagram
+        (a Facebook not registered yet is created through Instagram)."""
+        return self.request("POST", f"accounts/{int(instagram_id)}/via", json={"platform": platform}).get("account", {})
 
     def texts(self, type: str = "") -> Dict[str, List[Dict[str, Any]]]:
         """Saved texts by type: caption, comment, bio, name, username."""
@@ -521,6 +538,18 @@ class Device:
         """running, booted, network (type, country, ip, ok) and the latest automatic check (verdict, findings)."""
         d = self._data("health")
         return d if isinstance(d, dict) else {}
+
+    @property
+    def label(self) -> str:
+        """The name people see in the dashboard: their own, or "Model #N" by the phone's number in the account."""
+        return str((self.data or self.refresh()).get("label") or self.name)
+
+    def rename(self, label: str) -> Dict[str, Any]:
+        """Give the phone a name (up to 40 characters); an empty one goes back to "Model #N"."""
+        r = self.client.request("POST", self._p("label"), json={"label": label})
+        if isinstance(self.data, dict):
+            self.data["label"] = r.get("label", label)
+        return r
 
     # -- network exit ------------------------------------------------------------------------------------------
     def network(self) -> Dict[str, Any]:

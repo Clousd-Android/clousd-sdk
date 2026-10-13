@@ -23,6 +23,7 @@ import base64
 import contextvars
 import json
 import os
+import time
 from typing import Annotated, Any, Dict, Optional
 
 from pydantic import Field
@@ -64,7 +65,7 @@ _key: contextvars.ContextVar = contextvars.ContextVar("clousd_key", default="")
 _scale: Dict[str, float] = {}      # device → device pixels per screenshot pixel
 _els: Dict[str, Dict[str, Any]] = {}   # key+device → {seq, pts:[(cx, cy, label)]} of the last observe
 
-Device_ = Annotated[str, Field(description="Device name from devices (op=list), e.g. dev_04f2")]
+Device_ = Annotated[str, Field(description="Device from devices (op=list): its name, its label from the dashboard (e.g. \"Anna IG\" or \"Pixel 7 #3\") or its number")]
 
 
 def _use(ctx: Optional[Context]) -> None:
@@ -125,6 +126,41 @@ def client() -> Clousd:
     return c
 
 
+_names: Dict[str, Any] = {}   # key → (time, {name}, {label / number → name}) - phones by the name people gave them
+
+
+def _resolve(device: str) -> str:
+    """A device by its API name, its name in the dashboard ("Anna IG", "Pixel 7 #3", case-insensitive) or its number
+    ("3", "#3"). Unknown values pass through and the API answers 404."""
+    d = (device or "").strip()
+    if not d:
+        return d
+    k = _key.get() or "env"
+    at, names, labels = _names.get(k, (0.0, set(), {}))
+    if d in names and time.time() - at < 60:
+        return d
+    if time.time() - at > 30 or d.lower() not in labels:
+        names, labels = set(), {}
+        try:
+            for x in client().devices():
+                names.add(x.name)
+                lb = str(x.data.get("label") or "").strip().lower()
+                if lb:
+                    labels.setdefault(lb, x.name)
+                num = x.data.get("number")
+                if num:
+                    labels.setdefault(str(num), x.name)
+                    labels.setdefault("#" + str(num), x.name)
+        except ClousdError:
+            return d
+        if len(_names) > 256:
+            _names.clear()
+        _names[k] = (time.time(), names, labels)
+    if d in names:
+        return d
+    return labels.get(d.lower(), d)
+
+
 def _slot(device: str) -> str:
     return (_key.get() or "env")[-12:] + "/" + device
 
@@ -145,7 +181,7 @@ def _jpeg_w(b: bytes) -> int:
 
 def _learn_scale(device: str) -> float:
     """Phone pixels per image pixel, from the real image width - never from the requested one."""
-    d = client().device(device)
+    d = client().device(_resolve(device))
     try:
         o = d.observe(width=shot_width(), ui=False)
         _scale[device] = o["screen"]["w"] / float(o["image"]["w"])
@@ -171,11 +207,15 @@ def _err(e: Exception) -> str:
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Devices", readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
-def devices(op: Annotated[str, Field(description="list (default) | start | stop")] = "list",
-            device: Annotated[str, Field(description="device name, for start/stop")] = "",
+def devices(op: Annotated[str, Field(description="list (default) | start | stop | rename")] = "list",
+            device: Annotated[str, Field(description="device (name, label or number), for start / stop / rename")] = "",
+            label: Annotated[str, Field(description="rename: the new name, up to 40 characters")] = "",
             ctx: Optional[Context] = None) -> Dict[str, Any]:
     """Phones this API key can use.
-    op=list: name, state (running / stopped / starting), model, Android version and network exit of each phone.
+    op=list: name, label (the name people see in the dashboard, e.g. "Anna IG" or "Pixel 7 #3"), number, state (running /
+    stopped / starting), model, Android version, network exit, the app accounts linked to it and its proxy_id. Every
+    tool takes the name, the label or the number. op=rename with device and label: give a phone a name (empty = back to
+    "Model #N"); name phones after their accounts to keep a fleet readable.
     op=start / op=stop with `device`: start a stopped phone (waits until it has booted, one to three minutes) or stop
     one (a stopped phone keeps its state and costs nothing)."""
     _use(ctx)
@@ -183,9 +223,13 @@ def devices(op: Annotated[str, Field(description="list (default) | start | stop"
         if op == "list":
             return {"devices": [d.data for d in client().devices()]}
         if op in ("start", "stop") and device:
-            d = client().device(device)
+            d = client().device(_resolve(device))
             return {"result": (d.start() if op == "start" else d.stop()).output or "ok"}
-        return {"error": "op is list, start or stop (start/stop need device)"}
+        if op == "rename" and device:
+            r = client().device(_resolve(device)).rename(label)
+            _names.pop(_key.get() or "env", None)
+            return r
+        return {"error": "op is list, start, stop or rename (they need device)"}
     except ClousdError as e:
         return {"error": _err(e)}
 
@@ -222,7 +266,7 @@ def observe(device: Device_,
     """Look at the phone: a fresh screenshot, the app on screen and (with_text) every labelled or tappable element with
     a number. Act on an element by its number (act element=N); coordinates, when needed, are in this image's pixels."""
     _use(ctx)
-    d = client().device(device)
+    d = client().device(_resolve(device))
     try:
         o = d.observe(width=shot_width(), ui=with_text)
     except ClousdError as e:
@@ -289,7 +333,7 @@ def act(device: Device_,
     first) and works in any language. Returns what happened; "the screen did not change" means the action probably
     missed - observe again."""
     _use(ctx)
-    d = client().device(device)
+    d = client().device(_resolve(device))
     try:
         if action in ("tap", "long_press") and element is not None:
             last = _els.get(_slot(device))
@@ -366,7 +410,7 @@ def inspect(device: Device_,
     health: running, booted, network exit and the latest automatic check of the phone.
     installed: packages of apps that can be opened."""
     _use(ctx)
-    d = client().device(device)
+    d = client().device(_resolve(device))
     try:
         if what == "notifications":
             return {"notifications": d.notifications()}
@@ -398,7 +442,7 @@ def snapshots(device: Device_,
     op=restore with snapshot_id: reset the phone to that state (what happened since is lost).
     op=clone with snapshot_id and new_name: a new phone from that state."""
     _use(ctx)
-    d = client().device(device)
+    d = client().device(_resolve(device))
     try:
         if op == "list":
             return {"snapshots": d.snapshots()}
@@ -427,7 +471,7 @@ def recipe(device: Device_,
     op=record_start begins recording what is done on the phone (through act, or by a person in the live view);
     record_status shows progress; record_stop returns the recorded draft recipe, ready for op=run."""
     _use(ctx)
-    d = client().device(device)
+    d = client().device(_resolve(device))
     try:
         if op == "run":
             v = json.loads(vars) if vars.strip() else {}
@@ -452,8 +496,8 @@ def recipe(device: Device_,
 def _devs(raw: str) -> list:
     raw = (raw or "").strip()
     if raw.startswith("["):
-        return [str(x) for x in json.loads(raw)]
-    return [x.strip() for x in raw.split(",") if x.strip()]
+        return [_resolve(str(x)) for x in json.loads(raw)]
+    return [_resolve(x.strip()) for x in raw.split(",") if x.strip()]
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Network exits and proxies", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True))
@@ -507,10 +551,10 @@ def network(op: Annotated[str, Field(description="options | status | proxies | a
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Accounts, texts and media", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
-def resources(op: Annotated[str, Field(description="accounts | add_accounts | link_account | texts | add_texts | media | upload_media | send_media")],
-              platform: Annotated[str, Field(description="accounts: filter by app package, e.g. com.instagram.android")] = "",
+def resources(op: Annotated[str, Field(description="accounts | add_accounts | link_account | add_via_instagram | texts | add_texts | media | upload_media | send_media")],
+              platform: Annotated[str, Field(description="accounts: filter by app package, e.g. com.instagram.android; add_via_instagram: com.facebook.katana or com.instagram.barcelona")] = "",
               accounts: Annotated[str, Field(description='add_accounts: JSON list of {platform, login, password, email?, email_password?, totp?, note?, device?}')] = "",
-              account_id: Annotated[int, Field(description="link_account: account id from op=accounts")] = 0,
+              account_id: Annotated[int, Field(description="link_account: account id from op=accounts; add_via_instagram: the Instagram account id")] = 0,
               device: Annotated[str, Field(description="link_account: the phone to link it to (empty = unlink)")] = "",
               type: Annotated[str, Field(description="texts / add_texts: caption | comment | bio | name | username")] = "",
               texts: Annotated[str, Field(description="add_texts: JSON list of strings")] = "",
@@ -522,7 +566,9 @@ def resources(op: Annotated[str, Field(description="accounts | add_accounts | li
               devices: Annotated[str, Field(description="send_media: device names, JSON list or comma-separated")] = "",
               ctx: Optional[Context] = None) -> Dict[str, Any]:
     """The account's resources, the same as Resources in the dashboard. accounts: saved app accounts (login, status, the
-    phone it is linked to) - passwords and 2FA secrets are never shown; to sign a phone in, run fleet with the step
+    phone it is linked to; parent_id = it signs in through that Instagram) - passwords and 2FA secrets are never shown;
+    add_via_instagram (account_id = an Instagram account, platform = com.facebook.katana or com.instagram.barcelona): a
+    Facebook / Threads that signs in through that Instagram, on the same phone, no password. To sign a phone in, run fleet with the step
     {"op":"login","package":...,"account":<id> or "linked"} and the server fills the password itself. add_accounts /
     link_account: save accounts and link one to a phone. texts / add_texts: captions, comments, bios, names. media /
     upload_media: the photo and video library; publish one with fleet step {"op":"publish","package":...,"text":"post",
@@ -541,6 +587,10 @@ def resources(op: Annotated[str, Field(description="accounts | add_accounts | li
             if not account_id:
                 return {"error": "link_account needs account_id"}
             return c.link_account(account_id, device or None)
+        if op == "add_via_instagram":
+            if not account_id or not platform:
+                return {"error": "add_via_instagram needs account_id (the Instagram) and platform"}
+            return {"account": c.add_via_instagram(account_id, platform)}
         if op == "texts":
             return {"texts": c.texts(type)}
         if op == "add_texts":
@@ -623,10 +673,8 @@ def fleet(op: Annotated[str, Field(description="recipes | run | status")],
             raw = devices.strip()
             if raw == "all":
                 names = [d.name for d in c.devices() if d.data.get("state") == "running"]
-            elif raw.startswith("["):
-                names = [str(x) for x in json.loads(raw)]
             else:
-                names = [x.strip() for x in raw.split(",") if x.strip()]
+                names = _devs(raw)
             if not names:
                 return {"error": "run needs devices (names, or \"all\")"}
             if len(names) > 32:
@@ -641,7 +689,7 @@ def fleet(op: Annotated[str, Field(description="recipes | run | status")],
             else:
                 return {"error": "run needs package + action (see op=recipes), or steps"}
             sg = [int(x) for x in stagger.replace(" ", "").split(",") if x] if stagger.strip() else None
-            vb = json.loads(vars_by_device) if vars_by_device.strip() else None
+            vb = {_resolve(k): v for k, v in json.loads(vars_by_device).items()} if vars_by_device.strip() else None
             j = c.run(names, st, stagger=sg, vars_by_device=vb, wait=False)
             return {"job": j.id, "state": j.state or "running", "devices": names,
                     "next": "call fleet op=status with this job every 30-60 s"}

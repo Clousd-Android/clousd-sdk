@@ -228,7 +228,8 @@ model is typically 5 to 10 seconds.
 
 | Route | Purpose |
 |---|---|
-| `GET /devices`, `GET /devices/{name}` | phones the key can use, their state and network |
+| `GET /devices`, `GET /devices/{name}` | phones the key can use: state, network, `label` (the name in the dashboard, e.g. "Anna IG" or "Pixel 7 #3"), `number`, linked `accounts`, `proxy_id` |
+| `POST /devices/{name}/label` | name a phone; tools and the SDK find phones by name or number too (`c.find("Anna IG")`) |
 | `POST /devices` | create a phone: model, Android version, network type and country, plan (`Idempotency-Key` required) |
 | `POST /devices/{name}/start`, `/stop`, `/restart`, `DELETE /devices/{name}` | lifecycle; long operations answer `202` with a job |
 | `GET /devices/{name}/screenshot?w=540` | PNG, or JPEG when a width is given |
@@ -243,7 +244,7 @@ model is typically 5 to 10 seconds.
 | `GET`/`POST`/`DELETE /devices/{name}/adb` | ADB over a relay: one-time code, IP allow-list, expiry |
 | `GET`/`POST /devices/{name}/snapshots`, `POST …/snapshots/{id}/restore`, `…/clone` | saved states: reset between runs, or clone a phone from a state |
 | `GET`/`POST /proxies`, `POST /proxies/{id}/bind`, `/rotate`, `/check`, `POST /proxies/unbind` | the account's proxies: add your own or a Clousd exit, put devices on it, new IP |
-| `GET`/`POST /accounts`, `POST /accounts/{id}/link` | saved app accounts (never with passwords); a group signs in with `{"op":"login","account":<id>}` |
+| `GET`/`POST /accounts`, `POST /accounts/{id}/link`, `POST /accounts/{id}/via` | saved app accounts (never with passwords); Facebook / Threads through an Instagram account; a group signs in with `{"op":"login","account":<id>}` |
 | `GET`/`POST /texts`, `GET`/`POST /media`, `POST /media/send` | captions and comments, the photo and video library; a group publishes with `{"op":"publish","media_id":<id>}` |
 | `GET /jobs/{id}` | progress of long operations (for a group: `output` is JSON `{per_phone: {name: {state, steps}}}`) |
 

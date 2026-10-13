@@ -79,14 +79,14 @@ the right one.
 
 | Tool | What it does |
 |---|---|
-| `devices` | list the phones this key can use (model, Android, state, network); start or stop one |
+| `devices` | list the phones this key can use (name, number, model, Android, state, network, linked accounts); start, stop or rename one. Every tool takes the phone's API name, its name from the dashboard ("Anna IG", "Pixel 7 #3") or its number |
 | `observe` | a fresh screenshot with a number drawn on every element, the app in front, and the elements as text with their positions |
 | `act` | `tap` / `long_press` (by element number or point), `swipe`, `scroll`, `tap_text`, `wait_text`, `type`, `key`, `open_app`, `close_app`, `open_url`, `intent`, `settings`, `clipboard_set`, `notifications_open` / `_close` / `_clear`, `installed`; waits until the screen settles and refuses an action taken on a stale screen |
 | `inspect` | read without touching the screen: `notifications`, `clipboard`, `app` (version, install time, running), `crashes` (app crashes, native crashes, ANRs), `health`, `installed` |
 | `snapshots` | list, save, restore (reset between runs) or clone a phone with its own identity |
 | `recipe` | run an app recipe on one phone (built-in flows such as login, warm-up, publish, or your own steps); record a new one from what is done on the phone and replay it without a model |
 | `network` | where phones go online: exit types and countries on sale, the account's proxies and the devices on each, add your own proxy or a Clousd exit, bind devices, new IP, check |
-| `resources` | saved app accounts (never with passwords), texts, the media library; add accounts and link them to phones, upload files, copy them into phones' galleries |
+| `resources` | saved app accounts (never with passwords), texts, the media library; add accounts and link them to phones, add Facebook / Threads that sign in through an Instagram account, upload files, copy them into phones' galleries |
 | `fleet` | many phones in one call: `recipes` lists the built-in recipes with their inputs, `run` starts a recipe or your steps on up to 32 phones in parallel (each with its own login via `vars_by_device`, starts spread with `stagger`) and returns a job, `status` shows per-phone progress |
 
 Screenshots come back 540 px wide (`CLOUSD_SHOT_WIDTH` to change). Act on an element by its number from the last

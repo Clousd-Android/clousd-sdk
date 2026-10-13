@@ -46,6 +46,7 @@ phone.wait_text("Berlin", timeout=30)          # check
 | `notifications()`, `clipboard_get()` | `intent(action, data, ...)`, `settings("wifi")` | `record_start()` / `record_stop()` |
 | `app_info(pkg)`, `crashes(pkg)`, `health()` | `clipboard_set(text)`, `notifications_open()` / `_clear()` | |
 | `c.proxies()`, `c.accounts()`, `c.texts()`, `c.media()` | `c.add_proxy(...)`, `c.bind_proxy(id, phones)`, `c.rotate_proxy(id)`, `c.add_accounts([...])`, `c.link_account(id, phone)`, `c.upload_media(path)`, `c.send_media(ids, phones)` | `device.network()`, `device.set_network(...)`, `device.rotate_ip()` |
+| `c.find("Anna IG")`, `device.label` | `device.rename("Anna IG")`, `c.add_via_instagram(ig_id, "com.instagram.barcelona")` | |
 | `c.recipes(app)` | `c.run(devices, steps)`, `c.run_recipe(devices, pkg, action, vars)` | `job.results`, `job.failed` |
 
 Coordinates are device pixels (`size()` gives the screen). Long operations return a `Job`; they wait by default,
