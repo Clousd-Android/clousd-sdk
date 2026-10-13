@@ -321,6 +321,112 @@ paths:
         "202": { description: Started, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, job: { $ref: "#/components/schemas/Job" } } } } } }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+  /proxies:
+    get:
+      summary: Proxies of the account - your own proxies and Clousd exits, and which devices use each
+      description: Same list as the dashboard's Network page. Addresses come without passwords.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { proxies: { type: array, items: { type: object } }, types_on_sale: { type: array, items: { type: string } } } } } } }
+    post:
+      summary: Add your own proxy (checked at once) or a Clousd exit of a country (paid per GB)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                proxy: { type: string, description: "host:port:user:pass, user:pass@host:port or socks5://user:pass@host:port" }
+                ip_type: { type: string, enum: [static, residential, mobile] }
+                rotate_url: { type: string, description: the provider's link that changes the IP (residential or mobile) }
+                type: { type: string, description: instead of proxy - a Clousd exit, one of GET /network/options types }
+                country: { type: string, example: US }
+                name: { type: string }
+                group: { type: string }
+      responses:
+        "200": { description: Added, content: { application/json: { schema: { type: object, properties: { proxy: { type: object }, check: { type: object } } } } } }
+  /proxies/{id}/bind:
+    post:
+      summary: Put devices on this proxy - time zone, locale and SIM follow the exit; stopped devices get it when they start
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { devices: { type: array, items: { type: string } } } } } } }
+      responses:
+        "200": { description: Per device - switching (with a job), saved (not running) or failed, content: { application/json: { schema: { type: object } } } }
+  /proxies/unbind:
+    post:
+      summary: Take devices off their proxy (a device without one has no internet until bound again)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { devices: { type: array, items: { type: string } } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /proxies/{id}/rotate:
+    post:
+      summary: New IP for every running device on the proxy - your proxy's rotation link, or a new session of a Clousd exit
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /proxies/{id}/check:
+    post:
+      summary: Check your own proxy - IP, country, ISP, latency
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /proxies/{id}:
+    delete:
+      summary: Delete a proxy no device uses
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: Deleted, content: { application/json: { schema: { type: object } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /accounts:
+    get:
+      summary: Saved app accounts (Resources) - never with passwords or 2FA secrets
+      description: >-
+        To sign a phone in, run a group with the step {"op":"login","package":...,"account":<id> or "linked"} (or
+        vars_by_phone {"dev": {"account": "<id>"}}): the server fetches the password itself at that step.
+      parameters: [{ name: platform, in: query, schema: { type: string, example: com.instagram.android } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { accounts: { type: array, items: { type: object } } } } } } }
+    post:
+      summary: Save accounts - {platform, login, password, email, email_password, totp, note, device} or {accounts:[...]}
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { ids: { type: array, items: { type: integer } } } } } } }
+  /accounts/{id}/link:
+    post:
+      summary: Link an account to a phone (one per app per phone), or unlink with device null
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { device: { type: [string, "null"] } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /texts:
+    get:
+      summary: Saved texts by type - caption, comment, bio, name, username
+      parameters: [{ name: type, in: query, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+    post:
+      summary: Add texts - {type, text} or {type, texts:[...]}
+      requestBody: { required: true, content: { application/json: { schema: { type: object } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /media:
+    get:
+      summary: The media library - photos and videos with their ids
+      parameters: [{ name: kind, in: query, schema: { type: string, enum: [image, video] } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+    post:
+      summary: Upload a photo or video - {name, data_b64, folder}, up to 25 MB
+      description: Publish it from a group with {"op":"publish","package":...,"text":"post","media_id":<id>,"caption":...}.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name, data_b64], properties: { name: { type: string, example: beach.jpg }, data_b64: { type: string }, folder: { type: integer } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /media/send:
+    post:
+      summary: Copy library files into phones' galleries, as if taken by that phone
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { ids: { type: array, items: { type: integer } }, devices: { type: array, items: { type: string } } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
   /jobs/{id}:
     parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
     get:

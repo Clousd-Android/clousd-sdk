@@ -1,6 +1,6 @@
 """MCP server for CLOUSD cloud phones: gives any MCP-capable agent a real Android phone to look at and act on.
 
-Seven tools (a few large tools are easier for a model to choose from than dozens of small ones):
+Nine tools (a few large tools are easier for a model to choose from than dozens of small ones):
   devices   - list the phones this key can use, start or stop one
   observe   - the screen as an image with a number on every element, plus the elements as text
   act       - tap (by element number or point), long_press, swipe, scroll, type, key, open_app, close_app, open_url,
@@ -9,6 +9,8 @@ Seven tools (a few large tools are easier for a model to choose from than dozens
   snapshots - list, save, restore (reset between runs) or clone a phone
   recipe    - run an app recipe (built-in or your own steps) and record new ones from what is done on the phone
   fleet     - many phones in one call: list the built-in recipes, run a recipe or steps on up to 32 phones, follow progress
+  network   - where phones go online: exit types and countries, the account's proxies, add your own, bind, new IP
+  resources - saved accounts (no secrets), texts, the media library; upload and send files to phones
 
 Screenshots come back `SHOT_WIDTH` px wide (540: ~1200 px long side on a 1080x2400 phone). act takes an element
 number from the last observe, or coordinates in that screenshot; both are converted to the device here.
@@ -53,6 +55,8 @@ mcp = _Server("clousd", instructions="Real Android phones in the cloud. For app 
               "publish, delete a post) first look at fleet op=recipes and run a recipe - it waits for the right screens and "
               "handles popups; tap step by step with observe/act only when no recipe fits. For several phones use one "
               "fleet op=run for all of them (it runs them in parallel and returns a job), never a loop of act calls. "
+              "Exits and proxies: network (bind a proxy to phones, add the user's own proxy, new IP); saved accounts, texts and "
+              "media: resources - sign in with an account id, never ask the user for passwords. "
               "Call observe before acting and act on element numbers from it; use inspect to read notifications, app "
               "versions or crashes without touching the screen; use snapshots restore to start each run from the same state.")
 _clients: Dict[str, Clousd] = {}   # API key → client (one per key; the remote server serves many keys)
@@ -445,6 +449,125 @@ def recipe(device: Device_,
         return {"error": _err(e)}
 
 
+def _devs(raw: str) -> list:
+    raw = (raw or "").strip()
+    if raw.startswith("["):
+        return [str(x) for x in json.loads(raw)]
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Network exits and proxies", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True))
+def network(op: Annotated[str, Field(description="options | status | proxies | add | check | bind | unbind | rotate | delete")],
+            device: Annotated[str, Field(description="status: the device to look at")] = "",
+            devices: Annotated[str, Field(description='bind / unbind: device names, JSON list or comma-separated')] = "",
+            proxy_id: Annotated[int, Field(description="check / bind / rotate / delete: proxy id from op=proxies")] = 0,
+            proxy: Annotated[str, Field(description="add: your own proxy - host:port:user:pass, user:pass@host:port or socks5://user:pass@host:port")] = "",
+            type: Annotated[str, Field(description="add: instead of your own proxy, a Clousd exit - residential | mobile | isp | datacenter (see op=options), paid per GB")] = "",
+            country: Annotated[str, Field(description="add: two-letter country of a Clousd exit, e.g. US")] = "",
+            ip_type: Annotated[str, Field(description="add (own proxy): static | residential | mobile")] = "static",
+            rotate_url: Annotated[str, Field(description="add (own residential/mobile proxy): the provider's link that changes the IP")] = "",
+            name: Annotated[str, Field(description="add: a name to find it by")] = "",
+            ctx: Optional[Context] = None) -> Dict[str, Any]:
+    """Where phones go online. Every phone uses one proxy of the account: your own proxy, or a Clousd exit (residential,
+    mobile, ISP, datacenter in a country, paid per GB); time zone, locale and SIM follow it. op=options: exit types on
+    sale and countries. op=status: the exit a device uses now (IP, country, carrier). op=proxies: the account's proxies
+    and which devices use each. op=add: save your proxy (it is checked at once) or a Clousd exit. op=bind: put devices on
+    a proxy. op=unbind: take them off (no internet until bound again). op=rotate: new IP for every running device on the
+    proxy. op=check: test your proxy. op=delete: remove an unused proxy."""
+    _use(ctx)
+    try:
+        c = client()
+        if op == "options":
+            return c.network_options()
+        if op == "status":
+            if not device:
+                return {"error": "status needs device"}
+            return c.device(device).network()
+        if op == "proxies":
+            return {"proxies": c.proxies()}
+        if op == "add":
+            if not proxy and not type:
+                return {"error": "add needs proxy (your own) or type + country (a Clousd exit)"}
+            return c.add_proxy(proxy=proxy, type=type, country=country, ip_type=ip_type, rotate_url=rotate_url, name=name)
+        if op in ("check", "rotate", "delete"):
+            if not proxy_id:
+                return {"error": f"{op} needs proxy_id (op=proxies)"}
+            return {"check": c.check_proxy, "rotate": c.rotate_proxy, "delete": c.delete_proxy}[op](proxy_id)
+        if op == "bind":
+            if not proxy_id or not devices:
+                return {"error": "bind needs proxy_id and devices"}
+            return c.bind_proxy(proxy_id, _devs(devices))
+        if op == "unbind":
+            if not devices:
+                return {"error": "unbind needs devices"}
+            return c.unbind_proxy(_devs(devices))
+        return {"error": "op is options, status, proxies, add, check, bind, unbind, rotate or delete"}
+    except (ClousdError, ValueError) as e:
+        return {"error": _err(e)}
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Accounts, texts and media", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+def resources(op: Annotated[str, Field(description="accounts | add_accounts | link_account | texts | add_texts | media | upload_media | send_media")],
+              platform: Annotated[str, Field(description="accounts: filter by app package, e.g. com.instagram.android")] = "",
+              accounts: Annotated[str, Field(description='add_accounts: JSON list of {platform, login, password, email?, email_password?, totp?, note?, device?}')] = "",
+              account_id: Annotated[int, Field(description="link_account: account id from op=accounts")] = 0,
+              device: Annotated[str, Field(description="link_account: the phone to link it to (empty = unlink)")] = "",
+              type: Annotated[str, Field(description="texts / add_texts: caption | comment | bio | name | username")] = "",
+              texts: Annotated[str, Field(description="add_texts: JSON list of strings")] = "",
+              kind: Annotated[str, Field(description="media: image | video (empty = both)")] = "",
+              path: Annotated[str, Field(description="upload_media: a file path on the machine running this server (local MCP only)")] = "",
+              data_b64: Annotated[str, Field(description="upload_media: the file as base64 when there is no path (up to 25 MB)")] = "",
+              name: Annotated[str, Field(description="upload_media: file name with extension, e.g. beach.jpg")] = "",
+              media_ids: Annotated[str, Field(description="send_media: library ids, JSON list or comma-separated")] = "",
+              devices: Annotated[str, Field(description="send_media: device names, JSON list or comma-separated")] = "",
+              ctx: Optional[Context] = None) -> Dict[str, Any]:
+    """The account's resources, the same as Resources in the dashboard. accounts: saved app accounts (login, status, the
+    phone it is linked to) - passwords and 2FA secrets are never shown; to sign a phone in, run fleet with the step
+    {"op":"login","package":...,"account":<id> or "linked"} and the server fills the password itself. add_accounts /
+    link_account: save accounts and link one to a phone. texts / add_texts: captions, comments, bios, names. media /
+    upload_media: the photo and video library; publish one with fleet step {"op":"publish","package":...,"text":"post",
+    "media_id":<id>,"caption":...}. send_media: copy files into phones' galleries as if taken by that phone."""
+    _use(ctx)
+    try:
+        c = client()
+        if op == "accounts":
+            return {"accounts": c.accounts(platform)}
+        if op == "add_accounts":
+            lst = json.loads(accounts) if accounts.strip() else []
+            if not isinstance(lst, list) or not lst:
+                return {"error": "add_accounts needs accounts: a JSON list"}
+            return {"ids": c.add_accounts(lst)}
+        if op == "link_account":
+            if not account_id:
+                return {"error": "link_account needs account_id"}
+            return c.link_account(account_id, device or None)
+        if op == "texts":
+            return {"texts": c.texts(type)}
+        if op == "add_texts":
+            lst = json.loads(texts) if texts.strip() else []
+            if not type or not isinstance(lst, list):
+                return {"error": "add_texts needs type and texts (a JSON list)"}
+            return {"added": c.add_texts(type, lst)}
+        if op == "media":
+            return {"media": c.media(kind)}
+        if op == "upload_media":
+            if path:
+                if _key.get():   # remote server: no files of other machines
+                    return {"error": "path works with the local server only; send data_b64 and name"}
+                return {"media": c.upload_media(path, name)}
+            if data_b64 and name:
+                return {"media": c.upload_media(base64.b64decode(data_b64), name)}
+            return {"error": "upload_media needs path (local server) or data_b64 + name"}
+        if op == "send_media":
+            ids = [int(x) for x in _devs(media_ids)]
+            if not ids or not devices:
+                return {"error": "send_media needs media_ids and devices"}
+            return c.send_media(ids, _devs(devices))
+        return {"error": "op is accounts, add_accounts, link_account, texts, add_texts, media, upload_media or send_media"}
+    except (ClousdError, ValueError) as e:
+        return {"error": _err(e)}
+
+
 def _fleet_summary(job: Dict[str, Any]) -> Dict[str, Any]:
     """Job of a fleet run → state plus one short line per device (last step, ok or the error)."""
     try:
@@ -483,7 +606,10 @@ def fleet(op: Annotated[str, Field(description="recipes | run | status")],
     30-60 s until state is done or failed. Steps for op=run: recipe (package, action, vars), open_app / close_app
     (package), url (url), tap_text / wait_text (text, seconds), wait (seconds, seconds_max), scroll (text=down|up),
     browse (seconds 10-600: scroll like a person), install_app (package from the catalog), key (key), screenshot,
-    rotate (new IP), if_text / unless_text (text, skip)."""
+    rotate (new IP), if_text / unless_text (text, skip), login (package, account: an id from resources op=accounts or
+    "linked" for the account linked to each phone - the server fills the password), publish (package, text: post|story|reel,
+    media_id from resources op=media, caption). vars_by_device gives each phone its own account or media_id too, e.g.
+    {"dev_1": {"account": "12"}, "dev_2": {"account": "13"}}."""
     _use(ctx)
     try:
         c = client()

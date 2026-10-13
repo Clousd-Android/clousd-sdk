@@ -160,9 +160,95 @@ class Clousd:
                                 "vars": {k: str(v) for k, v in (vars or {}).items()}}
         return self.run(devices, [step], stagger=stagger, vars_by_device=vars_by_device, wait=wait, timeout=timeout)
 
+    # -- network exits: proxies of the account ------------------------------------------------------------------
+    def proxies(self) -> List[Dict[str, Any]]:
+        """Your own proxies and Clousd exits of the account: id, source (own | clousd), type, country, address (no
+        password), check, rotatable, devices (which phones use it). Same list as the dashboard's Network page."""
+        return self.request("GET", "proxies").get("proxies", [])
+
+    def add_proxy(self, proxy: str = "", type: str = "", country: str = "", ip_type: str = "static",
+                  rotate_url: str = "", name: str = "", group: str = "") -> Dict[str, Any]:
+        """Add your own proxy (`proxy` as host:port:user:pass, user:pass@host:port or socks5://...; it is checked at once)
+        or a Clousd exit (`type` residential | mobile | isp | datacenter + `country`, paid per GB). Returns {proxy, check}."""
+        body: Dict[str, Any] = {"name": name, "group": group}
+        if proxy:
+            body.update(proxy=proxy, ip_type=ip_type, rotate_url=rotate_url)
+        else:
+            body.update(type=type, country=country)
+        return self.request("POST", "proxies", json=body, timeout=120)
+
+    def check_proxy(self, proxy_id: int) -> Dict[str, Any]:
+        return self.request("POST", f"proxies/{int(proxy_id)}/check", json={}, timeout=60)
+
+    def bind_proxy(self, proxy_id: int, devices: List[Any]) -> Dict[str, Any]:
+        """Put devices on this proxy (time zone, locale and SIM follow the exit; a minute or two). Stopped devices get it
+        when they start."""
+        return self.request("POST", f"proxies/{int(proxy_id)}/bind", json={"devices": _names(devices)}, timeout=90)
+
+    def unbind_proxy(self, devices: List[Any]) -> Dict[str, Any]:
+        """Take devices off their proxy. A device without a proxy has no internet until you bind one."""
+        return self.request("POST", "proxies/unbind", json={"devices": _names(devices)}, timeout=90)
+
+    def rotate_proxy(self, proxy_id: int) -> Dict[str, Any]:
+        """New IP: your proxy's rotation link, or a new session of a Clousd exit, for every running device on it."""
+        return self.request("POST", f"proxies/{int(proxy_id)}/rotate", json={}, timeout=120)
+
+    def delete_proxy(self, proxy_id: int) -> Dict[str, Any]:
+        return self.request("DELETE", f"proxies/{int(proxy_id)}")
+
+    # -- resources: accounts, texts, media library ---------------------------------------------------------------
+    def accounts(self, platform: str = "") -> List[Dict[str, Any]]:
+        """Saved app accounts (Resources → Accounts) without secrets: id, platform, login, status, device it is linked to,
+        has_password / has_totp. Sign in with one in a group: {"op": "login", "package": ..., "account": id or "linked"}."""
+        return self.request("GET", "accounts", params={"platform": platform} if platform else None).get("accounts", [])
+
+    def add_accounts(self, accounts: List[Dict[str, Any]]) -> List[int]:
+        """Save accounts: dicts with platform (package, e.g. com.instagram.android), login, password, and optionally email,
+        email_password, totp (authenticator secret), note, device (link to a phone). Returns the new ids."""
+        return self.request("POST", "accounts", json={"accounts": accounts}).get("ids", [])
+
+    def link_account(self, account_id: int, device: Any = None) -> Dict[str, Any]:
+        """Link an account to a phone (one account per app per phone), or unlink with device=None."""
+        dev = device.name if isinstance(device, Device) else device
+        return self.request("POST", f"accounts/{int(account_id)}/link", json={"device": dev})
+
+    def texts(self, type: str = "") -> Dict[str, List[Dict[str, Any]]]:
+        """Saved texts by type: caption, comment, bio, name, username."""
+        return self.request("GET", "texts", params={"type": type} if type else None).get("texts", {})
+
+    def add_texts(self, type: str, texts: List[str]) -> int:
+        return int(self.request("POST", "texts", json={"type": type, "texts": list(texts)}).get("added", 0))
+
+    def media(self, kind: str = "") -> List[Dict[str, Any]]:
+        """The media library: id, kind (image | video), title, size. Publish one in a group with
+        {"op": "publish", "package": ..., "text": "post", "media_id": id, "caption": ...}."""
+        return self.request("GET", "media", params={"kind": kind} if kind else None).get("media", [])
+
+    def upload_media(self, data: Any, name: str = "", folder: Optional[int] = None) -> Dict[str, Any]:
+        """Add a photo or video to the library (up to 25 MB): `data` is bytes or a file path; `name` keeps the extension
+        (.jpg .png .webp .mp4 .mov)."""
+        import base64
+        import os
+        if isinstance(data, (str, os.PathLike)):
+            name = name or os.path.basename(str(data))
+            with open(data, "rb") as f:
+                data = f.read()
+        body: Dict[str, Any] = {"name": name, "data_b64": base64.b64encode(data).decode()}
+        if folder:
+            body["folder"] = int(folder)
+        return self.request("POST", "media", json=body, timeout=180).get("media", {})
+
+    def send_media(self, ids: List[int], devices: List[Any]) -> Dict[str, Any]:
+        """Copy library files into the phones' galleries, as if taken by that phone (EXIF of the model, local time, place)."""
+        return self.request("POST", "media/send", json={"ids": [int(i) for i in ids], "devices": _names(devices)}, timeout=120)
+
     def _job(self, resp: Dict[str, Any], wait: bool, timeout: float) -> "Job":
         job = Job(self, resp.get("job") or {"state": "done", "output": resp.get("output", "")})
         return job.wait(timeout) if wait else job
+
+
+def _names(devices: List[Any]) -> List[str]:
+    return [d.name if isinstance(d, Device) else str(d) for d in devices]
 
 
 class Job:
@@ -435,6 +521,27 @@ class Device:
         """running, booted, network (type, country, ip, ok) and the latest automatic check (verdict, findings)."""
         d = self._data("health")
         return d if isinstance(d, dict) else {}
+
+    # -- network exit ------------------------------------------------------------------------------------------
+    def network(self) -> Dict[str, Any]:
+        """The exit this phone uses now: type, country, city, carrier, isp, ip, timezone, locale, ok."""
+        return self.client.request("GET", self._p("network")).get("network", {})
+
+    def set_network(self, type: str, country: str = "", url: str = "", rotate_url: str = "") -> Dict[str, Any]:
+        """Switch the exit: type residential | mobile | isp | datacenter (+ country), byo (your proxy `url`, optional
+        `rotate_url`) or off. On an account key this saves the proxy in Network and binds it, like the dashboard."""
+        body: Dict[str, Any] = {"type": type}
+        if country:
+            body["country"] = country
+        if url:
+            body["url"] = url
+        if rotate_url:
+            body["rotate_url"] = rotate_url
+        return self.client.request("POST", self._p("network"), json=body, timeout=120)
+
+    def rotate_ip(self) -> Dict[str, Any]:
+        """New IP on the same exit."""
+        return self.client.request("POST", self._p("network/rotate"), json={}, timeout=120)
 
     # -- recipes: app scenarios as data, and recording them from the live screen --------------------------------
     def recipe(self, package: str = "", action: str = "", recipe: Optional[Dict[str, Any]] = None,

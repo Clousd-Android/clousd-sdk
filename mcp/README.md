@@ -73,7 +73,7 @@ must carry a key, nothing is read from the environment. The hosted endpoint is a
 
 ## Tools
 
-Seven tools: a few large tools are easier for a model to choose from than dozens of small ones. Every tool has
+Nine tools: a few large tools are easier for a model to choose from than dozens of small ones. Every tool has
 parameter descriptions, a result schema and hints (read-only, destructive, idempotent), so clients and models pick
 the right one.
 
@@ -85,6 +85,8 @@ the right one.
 | `inspect` | read without touching the screen: `notifications`, `clipboard`, `app` (version, install time, running), `crashes` (app crashes, native crashes, ANRs), `health`, `installed` |
 | `snapshots` | list, save, restore (reset between runs) or clone a phone with its own identity |
 | `recipe` | run an app recipe on one phone (built-in flows such as login, warm-up, publish, or your own steps); record a new one from what is done on the phone and replay it without a model |
+| `network` | where phones go online: exit types and countries on sale, the account's proxies and the devices on each, add your own proxy or a Clousd exit, bind devices, new IP, check |
+| `resources` | saved app accounts (never with passwords), texts, the media library; add accounts and link them to phones, upload files, copy them into phones' galleries |
 | `fleet` | many phones in one call: `recipes` lists the built-in recipes with their inputs, `run` starts a recipe or your steps on up to 32 phones in parallel (each with its own login via `vars_by_device`, starts spread with `stagger`) and returns a job, `status` shows per-phone progress |
 
 Screenshots come back 540 px wide (`CLOUSD_SHOT_WIDTH` to change). Act on an element by its number from the last
@@ -104,7 +106,9 @@ fleet op=run devices=all package=com.instagram.android action=warm
 fleet op=status job=j_8a1c                          -> {"counts": {"running": 7, "done": 3}, "devices": {...}}
 ```
 
-Signing ten accounts in at once: `fleet op=run devices=["dev_01","dev_02",...] package=com.instagram.android
+Signing ten accounts in at once from the saved accounts (`resources op=accounts`), the password never passes through the
+agent: `fleet op=run devices=all steps=[{"op":"login","package":"com.instagram.android","account":"linked"}]` signs every
+phone into the account linked to it. Or with logins given right there: `fleet op=run devices=["dev_01","dev_02",...] package=com.instagram.android
 action=login vars_by_device={"dev_01":{"login":"anna.k","password":"..."}, ...}`. Passwords never appear in the output.
 
 ## What a session looks like

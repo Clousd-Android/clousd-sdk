@@ -170,6 +170,17 @@ for name, r in job.results.items():
     print(name, r["state"], r["steps"][-1]["output"])
 ```
 
+Accounts, proxies and media come from the account too, so a whole morning is a few calls:
+
+```python
+p = c.add_proxy("res.example.net:9000:user:pass", ip_type="residential", rotate_url="https://example.net/rotate?key=...")
+c.bind_proxy(p["proxy"]["id"], phones)                          # exit, time zone, SIM follow the proxy
+ids = c.add_accounts([{"platform": "com.instagram.android", "login": "anna.k", "password": "...", "device": "dev_01"}])
+c.run(phones, [{"op": "login", "package": "com.instagram.android", "account": "linked"}])   # passwords stay on the server
+m = c.upload_media("beach.jpg")
+c.run(phones, [{"op": "publish", "package": "com.instagram.android", "text": "post", "media_id": m["id"], "caption": "Sunday"}])
+```
+
 Over MCP the same is the `fleet` tool: `fleet op=recipes app=instagram`, then `fleet op=run devices=all
 package=com.instagram.android action=warm vars={"seconds":"900"} stagger=20,90`, then `fleet op=status job=...` until
 it is done. Over HTTPS it is `GET /v1/recipes` and `POST /v1/groups` (below).
@@ -209,7 +220,7 @@ model is typically 5 to 10 seconds.
 |---|---|
 | [`openapi.yaml`](openapi.yaml) | OpenAPI 3.1 description of the public API v1 (`https://api.clousd.com/v1`) |
 | [`python/`](python) | `clousd`: the Python client (devices, observe/act, snapshots, recipes, recording, ADB, jobs), `clousd.agent` (task loop on any OpenAI-compatible model), `clousd.bench`, `clousd.explore`, the `clousd` CLI |
-| [`mcp/`](mcp) | `clousd-mcp`: MCP server with seven tools (`devices`, `observe`, `act`, `inspect`, `snapshots`, `recipe`, `fleet`), descriptions, result schemas and hints on every tool |
+| [`mcp/`](mcp) | `clousd-mcp`: MCP server with nine tools (`devices`, `observe`, `act`, `inspect`, `snapshots`, `recipe`, `fleet`, `network`, `resources`), descriptions, result schemas and hints on every tool |
 | [`docs/agent-loop.md`](docs/agent-loop.md) | How an agent drives a phone: the observe → act → verify loop, and the mistakes that cost the most time |
 | [`server.json`](server.json), [`smithery.yaml`](smithery.yaml) | Registry metadata: MCP registry entry `io.github.Clousd-Android/clousd-mcp` with the hosted endpoint |
 
@@ -231,6 +242,9 @@ model is typically 5 to 10 seconds.
 | `GET`/`POST /devices/{name}/network`, `POST …/network/rotate` | which exit the phone uses; switch country or type; new IP |
 | `GET`/`POST`/`DELETE /devices/{name}/adb` | ADB over a relay: one-time code, IP allow-list, expiry |
 | `GET`/`POST /devices/{name}/snapshots`, `POST …/snapshots/{id}/restore`, `…/clone` | saved states: reset between runs, or clone a phone from a state |
+| `GET`/`POST /proxies`, `POST /proxies/{id}/bind`, `/rotate`, `/check`, `POST /proxies/unbind` | the account's proxies: add your own or a Clousd exit, put devices on it, new IP |
+| `GET`/`POST /accounts`, `POST /accounts/{id}/link` | saved app accounts (never with passwords); a group signs in with `{"op":"login","account":<id>}` |
+| `GET`/`POST /texts`, `GET`/`POST /media`, `POST /media/send` | captions and comments, the photo and video library; a group publishes with `{"op":"publish","media_id":<id>}` |
 | `GET /jobs/{id}` | progress of long operations (for a group: `output` is JSON `{per_phone: {name: {state, steps}}}`) |
 
 Keys have a scope (`read` or `control`). Limits: 120 requests a minute per key and device, 600 a minute per key across
