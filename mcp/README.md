@@ -1,179 +1,103 @@
-# clousd-mcp: a real Android phone for your AI agent
+# clousd-mcp: real Android phones for your AI agent
 
-**Clousd MCP server** gives any MCP-capable agent a real Android phone in the cloud. Not an emulator: each device is
-built as a specific handset (Pixel, Galaxy, Xiaomi, Motorola, OnePlus, realme, OPPO, vivo, Sony, TECNO, Infinix and
-150+ more, Android 12 to 17) with the same build, sensors, cameras, codecs and GPU strings as the real hardware,
-Google Play inside, and its own network exit in the country you choose. Apps see a phone, so your agent sees the
-same screens a person sees: no "unusual activity" walls, no emulator detection, no captcha loops.
+**Clousd MCP server** gives any MCP-capable agent real Android phones in the cloud. Each device is built as a specific
+handset (Pixel, Galaxy, Xiaomi, Motorola, OnePlus and 150+ more, Android 12 to 17) with Google Play inside and its own
+network exit, so apps behave the way they do on the phone in a user's pocket.
 
-Six tools cover the whole loop: **observe** the screen (screenshot with numbered elements plus the UI tree), **act**
-on it (tap by element number, swipe, type in any language, open apps and links), **inspect** the phone without
-touching the screen (notifications, clipboard, app versions, crashes), **snapshots** to reset every run to the same
-state or clone a prepared phone into many, **recipe** to replay a recorded flow without a model, and **devices** to
-manage the fleet. Works with Cursor, Windsurf, Zed, desktop assistants, LangChain-style agents and anything else that
-speaks MCP, locally or through the hosted endpoint at `https://api.clousd.com/mcp`.
+Your agent does not have to tap every button itself. It gives a phone the goal in plain words - "open the app, sign in
+with the saved work login and tell me what the order page shows" - and Clousd's own phone agent works the screen and
+comes back with the answer, a step-by-step replay and, if asked, JSON in your schema. One call can give the same task to
+up to 32 phones at once. When your agent wants to drive the screen itself, `observe` and `act` are there too.
 
-Early access: keys on request at [clousd.com/agents](https://clousd.com/agents/#access). Docs:
-[clousd.com/docs](https://clousd.com/docs/). Source: [github.com/Clousd-Android/clousd-sdk](https://github.com/Clousd-Android/clousd-sdk).
+Docs: [clousd.com/docs/mcp](https://clousd.com/docs/mcp/). Source: [github.com/Clousd-Android/clousd-sdk](https://github.com/Clousd-Android/clousd-sdk).
 
-## Why a real cloud phone instead of an emulator
+## Tools
 
-| | Emulator on your machine | Clousd phone |
-|---|---|---|
-| What apps see | Goldfish/ranchu hardware, emulator build, no SIM | A specific real model: build fingerprint, sensors, cameras, codecs, GPU, SIM and carrier |
-| Google Play | Needs Google APIs images, often blocked | Play Store and Play services on every device |
-| Network | Your IP, your country | Residential, mobile, ISP or datacenter exit in the country you choose; SIM, time zone and locale follow it |
-| Reset between runs | Snapshots, slow to restore | Saved state restored in seconds; clone one prepared phone into ten or a hundred |
-| Scale | One per CPU core | Start with one, run hundreds, stopped phones cost nothing |
-| Setup | SDK, images, ADB, host resources | One API key |
+| Tool | What it does |
+|---|---|
+| `account` | Plan, phones, money left and warnings to tell the user |
+| `devices` | The phones this key can use (name, label, number, state, model, Android, exit); start, stop, rename |
+| `run` | Give one or many phones a task in plain words; waits up to 50 s and returns the status, the answer or what it waits on, and a replay link |
+| `run_status` | Follow a run (status, last steps, per-phone results), list recent runs, cancel, or tell the running agent something |
+| `answer` | Reply to a run that asks a question or asks permission for a step |
+| `observe` | A fresh screenshot with a number on every element, the app in front, the elements as text |
+| `act` | Tap an element number or a point, long press, swipe, scroll, type in any language, keys, open apps and links, intents, settings pages; read notifications, clipboard, app info, crashes, health |
+| `credentials` | Saved logins: package, name and which fields are set - never the values. Pass one to `run` and it is typed without anyone seeing it |
+| `schedules` | Tasks that run by themselves at a time on chosen days: list, add, pause, delete |
 
-That is why agents built for social apps, marketplaces, banking flows, app testing and research run here: the
-phone behaves like the device in a user's pocket, and every episode starts from the same state.
+## Connect
 
-## Install
+### Hosted server, no install
+
+`https://api.clousd.com/mcp` (streamable HTTP).
+
+- **Claude.ai, ChatGPT and other apps with connectors**: add the URL; the app opens Clousd's sign-in page (OAuth 2.1)
+  and you allow access. Disconnect any time in the dashboard: Settings → Connections → Connected apps.
+- **Coding agents and other clients**: send your key in the header.
+
+```json
+{
+  "mcpServers": {
+    "clousd": { "url": "https://api.clousd.com/mcp", "headers": { "Authorization": "Bearer cl_live_..." } }
+  }
+}
+```
+
+```bash
+claude mcp add --transport http clousd https://api.clousd.com/mcp --header "Authorization: Bearer cl_live_..."
+```
+
+The key goes only in the `Authorization` header: a key in the address is refused (addresses end up in logs and
+histories). Without a header the server answers `401` with the OAuth metadata, which is how connector apps start the
+sign-in.
+
+### Local (stdio)
 
 ```bash
 pip install clousd-mcp
 ```
 
-Any MCP client, local (stdio) server, one environment variable:
-
 ```json
 {
   "mcpServers": {
-    "clousd": {
-      "command": "clousd-mcp",
-      "env": { "CLOUSD_API_KEY": "cl_live_..." }
-    }
+    "clousd": { "command": "clousd-mcp", "env": { "CLOUSD_API_KEY": "cl_live_..." } }
   }
 }
 ```
 
-Clients that take a command line instead of JSON: run `clousd-mcp` with `CLOUSD_API_KEY` in the environment.
+Keys: dashboard → Settings → Connections → API keys. A `read` key can look but never acts; a `read & write` key can
+act and run tasks.
 
-### Remote server, no install
+## A session
 
-The same server runs at `https://api.clousd.com/mcp` (streamable HTTP). Point any MCP client at it with your key in
-the `Authorization` header; clients that cannot set headers can pass `?api_key=cl_live_...` in the URL.
-
-```json
-{
-  "mcpServers": {
-    "clousd": {
-      "url": "https://api.clousd.com/mcp",
-      "headers": { "Authorization": "Bearer cl_live_..." }
-    }
-  }
-}
+```
+account                                         -> plan, 4 phones, no warnings
+devices                                         -> "Pixel 7 #1" running, "Galaxy A35 #2" running
+credentials package=com.example.shop            -> use: com.example.shop/work (username, password)
+run task="Open the Example Shop app, sign in and tell me how many orders are on the Orders page"
+    devices="1,2" credentials="com.example.shop/work"
+                                                -> status running, next: run_status in 20-60 s
+run_status run=r_8f2c wait_seconds=40           -> completed; Pixel 7 #1: "3 orders", Galaxy A35 #2: "3 orders";
+                                                   replay https://clousd.com/app/?run=r_8f2c
 ```
 
-Self-hosting the remote mode: `CLOUSD_MCP_HTTP=127.0.0.1:8790 clousd-mcp` serves `/mcp` over HTTP; every request
-must carry a key, nothing is read from the environment. The hosted endpoint is also listed in the
-[MCP registry](https://registry.modelcontextprotocol.io) as `io.github.Clousd-Android/clousd-mcp`.
+## Settings
 
-## Tools
-
-Ten tools: a few large tools are easier for a model to choose from than dozens of small ones. Every tool has
-parameter descriptions, a result schema and hints (read-only, destructive, idempotent), so clients and models pick
-the right one.
-
-| Tool | What it does |
+| Variable | Meaning |
 |---|---|
-| `devices` | list the phones this key can use (name, number, model, Android, state, network, linked accounts); start, stop or rename one. Every tool takes the phone's API name, its name from the dashboard ("Anna IG", "Pixel 7 #3") or its number |
-| `observe` | a fresh screenshot with a number drawn on every element, the app in front, and the elements as text with their positions |
-| `act` | `tap` / `long_press` (by element number or point), `swipe`, `scroll`, `tap_text`, `wait_text`, `type`, `key`, `open_app`, `close_app`, `open_url`, `intent`, `settings`, `clipboard_set`, `notifications_open` / `_close` / `_clear`, `installed`; waits until the screen settles and refuses an action taken on a stale screen |
-| `inspect` | read without touching the screen: `notifications`, `clipboard`, `app` (version, install time, running), `crashes` (app crashes, native crashes, ANRs), `health`, `installed` |
-| `snapshots` | list, save, restore (reset between runs) or clone a phone with its own identity |
-| `recipe` | run an app recipe on one phone (built-in flows such as login, warm-up, publish, or your own steps); record a new one from what is done on the phone and replay it without a model |
-| `network` | where phones go online: exit types and countries on sale, the account's proxies and the devices on each, add your own proxy or a Clousd exit, bind devices, new IP, check |
-| `resources` | saved app accounts (never with passwords), texts, the media library; add accounts and link them to phones, add Facebook / Threads that sign in through an Instagram account, upload files, copy them into phones' galleries |
-| `account` | the balance, spend per day (phones + proxy traffic), hours left, monthly renewals and warnings to tell the user; starts and fleet runs attach a money note when the balance is low |
-| `fleet` | many phones in one call: `recipes` lists the built-in recipes with their inputs, `run` starts a recipe or your steps on up to 32 phones in parallel (each with its own login via `vars_by_device`, starts spread with `stagger`) and returns a job, `status` shows per-phone progress |
+| `CLOUSD_API_KEY` | the key (stdio server) |
+| `CLOUSD_SHOT_WIDTH` | screenshot width for `observe`, 240 to 1080, default 540 |
+| `CLOUSD_MCP_HTTP` | `host:port` - run the remote (streamable HTTP) server at `/mcp` instead of stdio |
+| `CLOUSD_MCP_HOSTS` | public host names allowed in the Host header behind a reverse proxy, e.g. `api.clousd.com` |
+| `CLOUSD_MCP_RESOURCE_META` | OAuth protected-resource metadata URL sent with `401` (default: api.clousd.com's) |
 
-Screenshots come back 540 px wide (`CLOUSD_SHOT_WIDTH` to change). Act on an element by its number from the last
-`observe`: the most reliable way to press a button. Coordinates, when needed, are in that image and the server scales
-them to the phone. Typing goes through the input method and works in any language and in password fields.
+## Upgrading from 0.3
 
-## Automate, do not tap
+1.0 gives phones goals instead of scripts: `run` / `run_status` / `answer` replace `fleet` and `recipe`; saved logins
+(`credentials`) replace `resources` accounts; reading the phone moved into `act`; `network`, `snapshots` and `inspect`
+are no longer MCP tools (the REST API and the Python client still have proxies, snapshots and device reads). Keys in
+the URL (`?api_key=`, `?config=`) are no longer accepted - send the `Authorization` header or connect with OAuth.
 
-Tapping through `observe` -> `act` is for exploring and for screens no recipe covers. For a known app task the agent
-should run a recipe, and for several phones one `fleet` call, not a loop:
+## License
 
-```
-fleet op=recipes app=instagram                      -> login, warm, publish_post, publish_story, delete_last_post
-fleet op=run devices=all package=com.instagram.android action=warm
-          vars={"seconds":"900","comment_chance":"0.1"} stagger=20,90
-                                                    -> {"job": "j_8a1c", "devices": [10 phones]}
-fleet op=status job=j_8a1c                          -> {"counts": {"running": 7, "done": 3}, "devices": {...}}
-```
-
-Signing ten accounts in at once from the saved accounts (`resources op=accounts`), the password never passes through the
-agent: `fleet op=run devices=all steps=[{"op":"login","package":"com.instagram.android","account":"linked"}]` signs every
-phone into the account linked to it. Or with logins given right there: `fleet op=run devices=["dev_01","dev_02",...] package=com.instagram.android
-action=login vars_by_device={"dev_01":{"login":"anna.k","password":"..."}, ...}`. Passwords never appear in the output.
-
-## What a session looks like
-
-```
-observe   dev_04f2                               -> screenshot, "On screen: com.android.chrome", elements 1..34
-act       dev_04f2 tap element=12                -> "ok" (settled in 0.6 s)
-act       dev_04f2 type text="weather in Berlin"
-act       dev_04f2 key text=enter
-act       dev_04f2 wait_text text=Berlin         -> "found after 1.9 s"
-inspect   dev_04f2 crashes                       -> []
-snapshots dev_04f2 restore snapshot_id=snap_7f3  -> "restored"   (next episode starts clean)
-```
-
-## What teams use it for
-
-- **Agent evaluation and training**: restore a snapshot, run the agent for N steps, check the screen, repeat. One
-  phone, hundreds of identical episodes. Run [AndroidWorld](https://github.com/google-research/android_world)-style
-  task sets on real device models.
-- **App testing on real models**: the same test on a Galaxy A35, a Pixel 9 and a moto g05, Android 14 to 16, without
-  a device farm. Crashes, ANRs and the logcat are one `inspect` away.
-- **Account and content operations**: each phone keeps its own identity, network and app state; clone a prepared
-  phone instead of setting up the next one by hand; recipes replay a flow on many phones.
-- **Anything that needs a phone in a specific country**: the exit, SIM, time zone and locale match.
-
-## Security and scope
-
-- Keys are issued per account with a scope (`read` or `control`) and an explicit list of phones; a read key can
-  observe and inspect but never acts.
-- Over HTTP the key travels in the `Authorization` header of every request; the hosted server keeps nothing between
-  requests.
-- Phones never leak traffic outside their configured exit: a kill-switch below Android drops anything that is not
-  going through the exit.
-- ADB is available on request per phone, with an IP allow-list and a one-time code, for checks that need to go deeper
-  than the screen.
-
-## FAQ
-
-**Is this an emulator?** No. Each phone is a full Android system built as a specific real model; apps read the same
-hardware identity the real handset reports. Emulator detection does not trigger.
-
-**Which MCP clients work?** Anything that speaks MCP over stdio or streamable HTTP: Cursor, Windsurf, Zed, desktop
-assistants, agent frameworks with MCP support, and your own code through the Python client
-([`clousd`](https://pypi.org/project/clousd/)).
-
-**How fast is a step?** `observe` with the UI tree takes about 1 to 3 seconds; `act` with settle 0.3 to 1 second.
-A typical agent step including the model is 5 to 10 seconds.
-
-**What does it cost?** Per minute while the phone runs, or a monthly plan; stopped phones cost nothing. Network traffic
-by the gigabyte. See [clousd.com/pricing](https://clousd.com/pricing/).
-
-**Can I run my own flows without a model?** Yes: record a flow once (`recipe` with `record_start` / `record_stop`, or
-by hand in the dashboard) and replay it with `recipe run` on any number of phones.
-
-## Links
-
-- Phones for AI agents: https://clousd.com/agents/
-- Documentation and API reference: https://clousd.com/docs/ and https://clousd.com/docs/reference/
-- Device catalog (150+ models): https://clousd.com/devices/
-- Networks: https://clousd.com/network/
-- Snapshots and clones: https://clousd.com/snapshots/
-- Python client: https://pypi.org/project/clousd/
-- Source, OpenAPI description, issues: https://github.com/Clousd-Android/clousd-sdk
-
-Built on the [`clousd`](https://pypi.org/project/clousd/) Python client. MIT license.
-
-mcp-name: io.github.Clousd-Android/clousd-mcp
+MIT

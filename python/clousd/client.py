@@ -2,14 +2,16 @@
 
     from clousd import Clousd
     c = Clousd()                          # CLOUSD_API_KEY from the environment
-    phone = c.device("dev_04f2")
-    phone.restore("v3", wait=True)        # reset to a saved state
-    png = phone.screenshot()              # look
-    phone.tap_text("Add to cart")         # act
-    phone.wait_text("Added")              # check
+    run = c.run("Open Settings and tell me the Android version", device="dev_04f2")
+    print(run.status, run.answer)         # completed  "Android 15"
+
+    phone = c.device("dev_04f2")          # or drive the screen yourself
+    png = phone.screenshot()
+    phone.tap_text("Wi-Fi")
 
 Every call is a plain HTTPS request to https://api.clousd.com/v1 with `Authorization: Bearer cl_live_…`.
-Long operations (start, snapshots, restore, clone) return a Job; `wait=True` or `job.wait()` polls it.
+A task (`run`) is done on the phone by Clousd's own agent; follow it with `run.events()` or `run.wait()`.
+Long device operations (start, snapshots, restore, clone) return a Job; `wait=True` or `job.wait()` polls it.
 """
 from __future__ import annotations
 
@@ -17,7 +19,8 @@ import base64
 import os
 import struct
 import time
-from typing import Any, Dict, List, Optional
+import json as _json
+from typing import Any, Dict, Iterator, List, Optional
 
 import requests
 
@@ -42,16 +45,16 @@ class Clousd:
         self.base_url = (base_url or os.environ.get("CLOUSD_API_URL") or DEFAULT_URL).rstrip("/")
         self.timeout = timeout
         self._http = requests.Session()
-        self._http.headers.update({"Authorization": "Bearer " + self.api_key, "User-Agent": "clousd-python/0.2"})
+        self._http.headers.update({"Authorization": "Bearer " + self.api_key, "User-Agent": "clousd-python/1.0"})
 
     # -- transport ---------------------------------------------------------------------------------------------
     def request(self, method: str, path: str, json: Any = None, params: Any = None,
-                timeout: Optional[float] = None, raw: bool = False) -> Any:
+                timeout: Optional[float] = None, raw: bool = False, headers: Optional[Dict[str, str]] = None) -> Any:
         """One API call. Retries politely on 429 (60 requests a minute per key) and on a dropped connection."""
         url = self.base_url + "/" + path.lstrip("/")
         for attempt in range(5):
             try:
-                r = self._http.request(method, url, json=json, params=params, timeout=timeout or self.timeout)
+                r = self._http.request(method, url, json=json, params=params, timeout=timeout or self.timeout, headers=headers)
             except requests.ConnectionError:
                 if attempt == 4:
                     raise
@@ -135,47 +138,83 @@ class Clousd:
         """Phone models available to create devices from."""
         return self.request("GET", "models").get("models", [])
 
-    # -- many devices at once -----------------------------------------------------------------------------------
-    def recipes(self, app: str = "") -> List[Dict[str, Any]]:
-        """Built-in app recipes: package, app, action, about, inputs [{name, about, required}], status (tested | beta).
-        `app` filters by app name or package (case-insensitive substring)."""
-        rows = self.request("GET", "recipes").get("recipes", [])
-        if app:
-            a = app.lower()
-            rows = [r for r in rows if a in str(r.get("app", "")).lower() or a in str(r.get("package", "")).lower()]
-        return rows
+    # -- tasks: a goal in plain words, done on the phone by Clousd's agent ------------------------------------------
+    def run(self, task: str, device: Any = None, devices: Optional[List[Any]] = None,
+            credentials: Optional[List[Any]] = None, output_schema: Optional[Dict[str, Any]] = None,
+            mode: str = "auto", max_steps: Optional[int] = None, timeout: Optional[int] = None,
+            options: Optional[Dict[str, Any]] = None, idempotency_key: Optional[str] = None,
+            wait: bool = False, wait_timeout: float = 1800) -> "Run":
+        """Give one phone (`device`) or several (`devices`, up to 32 - one run each, all started at once) a task in plain
+        words: "open Settings and tell me the Android version", "sign in to the app with the saved login". Clousd's agent
+        looks at the screen, acts, and finishes with an answer.
 
-    def run(self, devices: List[Any], steps: List[Dict[str, Any]], stagger: Optional[List[int]] = None,
-            vars_by_device: Optional[Dict[str, Dict[str, Any]]] = None, wait: bool = True,
-            timeout: float = 6 * 3600) -> "Job":
-        """Run the same steps on many devices at once (up to 32 per call; they may live on different servers).
-        Steps are dicts like {"op": "recipe", "package": "com.instagram.android", "action": "warm", "vars": {...}},
-        {"op": "open_app", "package": ...}, {"op": "wait", "seconds": 5}, {"op": "tap_text", "text": "Allow"}.
-        `stagger` [min, max] seconds spreads the starts so the phones do not act in lockstep.
-        `vars_by_device` gives each device its own recipe variables (its login and password, its caption):
-        {"dev_1": {"login": "anna", "password": "..."}, ...} - merged over the step's vars. Passwords never appear in output.
-        Returns the Job; its `results` maps device → {state: done | failed, steps: [{op, ok, output, took_s}]}.
-        A failed device does not raise - check `job.results` (or `job.failed`)."""
-        names = [d.name if isinstance(d, Device) else str(d) for d in devices]
-        body: Dict[str, Any] = {"phones": names, "steps": steps}
-        if stagger:
-            body["stagger"] = list(stagger)
-        if vars_by_device:
-            body["vars_by_phone"] = {(k.name if isinstance(k, Device) else str(k)): {a: str(b) for a, b in v.items()}
-                                     for k, v in vars_by_device.items()}
-        job = Job(self, self.request("POST", "groups", json=body).get("job", {}))
-        return job.wait(timeout, raise_on_fail=False) if wait else job
+        credentials: saved logins to use, as {"package": ..., "name": ...} dicts or credential dicts from credentials();
+            their values are typed on the phone without the model or you seeing them.
+        output_schema: a JSON Schema; the answer also comes back as `run.structured_output` in that shape.
+        mode: "auto" (default) - the agent does not stop to ask; "ask" - it asks before risky steps (`run.card`, answer it).
+        max_steps / timeout (seconds) / options: limits and the rest of the options (reasoning, vision, recording...).
+        idempotency_key: a retry with the same key and body returns the same run instead of starting a new one.
+        Returns a Run right away (status queued / running); `wait=True` returns when it has finished."""
+        body: Dict[str, Any] = {"task": task, "model": {"provider": "clousd"}, "source": "sdk"}
+        if devices:
+            body["devices"] = _names(devices)
+        if device is not None:
+            body["device"] = device.name if isinstance(device, Device) else str(device)
+        opts: Dict[str, Any] = dict(options or {})
+        opts["mode"] = mode
+        if max_steps:
+            opts["max_steps"] = int(max_steps)
+        if timeout:
+            opts["timeout"] = int(timeout)
+        if output_schema:
+            opts["output_schema"] = output_schema
+        body["options"] = opts
+        if credentials:
+            body["credentials"] = [{"package": str(x.get("package", "")), "name": str(x.get("name", ""))} for x in credentials]
+        headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
+        r = self.request("POST", "runs", json=body, timeout=90, headers=headers)
+        run = Run(self, r.get("run", {}), r.get("runs"))
+        return run.wait(wait_timeout) if wait else run
 
-    def run_recipe(self, devices: List[Any], package: str, action: str, vars: Optional[Dict[str, Any]] = None,
-                   stagger: Optional[List[int]] = None, vars_by_device: Optional[Dict[str, Dict[str, Any]]] = None,
-                   wait: bool = True, timeout: float = 6 * 3600) -> "Job":
-        """One built-in recipe on many devices at once, e.g.
-            run_recipe(phones, "com.instagram.android", "warm", {"seconds": 900, "comment_chance": 0.1}, stagger=[20, 90])
-            run_recipe(phones, "com.instagram.android", "login", vars_by_device={"dev_1": {"login": ..., "password": ...}})
-        Names, actions and inputs: recipes()."""
-        step: Dict[str, Any] = {"op": "recipe", "package": package, "action": action,
-                                "vars": {k: str(v) for k, v in (vars or {}).items()}}
-        return self.run(devices, [step], stagger=stagger, vars_by_device=vars_by_device, wait=wait, timeout=timeout)
+    def runs(self, status: str = "", device: Any = None, since: str = "", limit: int = 50) -> List["Run"]:
+        """Recent runs of this key, newest first. status: queued | running | paused | completed | failed | cancelled;
+        since: RFC 3339 time."""
+        params: Dict[str, Any] = {"limit": int(limit)}
+        if status:
+            params["status"] = status
+        if device is not None:
+            params["device"] = device.name if isinstance(device, Device) else str(device)
+        if since:
+            params["since"] = since
+        return [Run(self, x) for x in self.request("GET", "runs", params=params).get("runs", [])]
+
+    def get_run(self, run_id: str) -> "Run":
+        return Run(self, self.request("GET", f"runs/{run_id}").get("run", {"id": run_id}))
+
+    # -- schedules: a task that runs by itself on days of the week ---------------------------------------------------
+    def schedules(self) -> List[Dict[str, Any]]:
+        """Schedules of this key: id, name, phones, task, at (HH:MM), days (1 = Monday … 7; empty = every day), tz,
+        enabled, last_run and last_runs (ids of the runs it started last time)."""
+        return self.request("GET", "schedules").get("schedules", [])
+
+    def add_schedule(self, task: str, devices: List[Any], at: str, days: Optional[List[int]] = None, tz: str = "UTC",
+                     name: str = "", credentials: Optional[List[Any]] = None,
+                     options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Run `task` on `devices` at `at` (HH:MM in time zone `tz`, e.g. "Europe/Berlin") on `days` (1-7, empty = every
+        day). Each firing starts runs like run(); find them with runs() or the schedule's last_runs."""
+        body: Dict[str, Any] = {"name": name or task[:60], "phones": _names(devices), "task": task, "at": at,
+                                "days": list(days or []), "tz": tz, "model": {"provider": "clousd"},
+                                "options": dict(options or {})}
+        if credentials:
+            body["credentials"] = [{"package": str(x.get("package", "")), "name": str(x.get("name", ""))} for x in credentials]
+        return self.request("POST", "schedules", json=body).get("schedule", {})
+
+    def toggle_schedule(self, schedule_id: str) -> Dict[str, Any]:
+        """Pause a schedule or turn it back on."""
+        return self.request("POST", f"schedules/{schedule_id}/toggle", json={})
+
+    def delete_schedule(self, schedule_id: str) -> Dict[str, Any]:
+        return self.request("POST", f"schedules/{schedule_id}/delete", json={})
 
     # -- network exits: proxies of the account ------------------------------------------------------------------
     def proxies(self) -> List[Dict[str, Any]]:
@@ -213,38 +252,54 @@ class Clousd:
     def delete_proxy(self, proxy_id: int) -> Dict[str, Any]:
         return self.request("DELETE", f"proxies/{int(proxy_id)}")
 
-    # -- resources: accounts, texts, media library ---------------------------------------------------------------
-    def accounts(self, platform: str = "") -> List[Dict[str, Any]]:
-        """Saved app accounts (Resources → Accounts) without secrets: id, platform, login, status, device it is linked to,
-        has_password / has_totp. Sign in with one in a group: {"op": "login", "package": ..., "account": id or "linked"}."""
-        return self.request("GET", "accounts", params={"platform": platform} if platform else None).get("accounts", [])
+    # -- saved logins: typed on the phone during a run, never shown --------------------------------------------------
+    def credentials(self, package: str = "") -> List[Dict[str, Any]]:
+        """Saved logins (Tasks → Sign-in in the dashboard): id, package, name and which fields are set (username, email,
+        password, phone, totp, token, backup). Values never leave Clousd - pass a login to run(credentials=[...])."""
+        return self.request("GET", "credentials", params={"package": package} if package else None).get("credentials", [])
 
-    def add_accounts(self, accounts: List[Dict[str, Any]]) -> List[int]:
-        """Save accounts: dicts with platform (package, e.g. com.instagram.android), login, password, and optionally email,
-        email_password, totp (authenticator secret), note, device (link to a phone). Returns the new ids."""
-        return self.request("POST", "accounts", json={"accounts": accounts}).get("ids", [])
+    def add_credential(self, package: str, name: str, fields: Dict[str, str]) -> Dict[str, Any]:
+        """Save a login for an app: fields like {"username": "anna", "password": "...", "totp": "otpauth://... or the secret"}."""
+        return self.request("POST", "credentials", json={"package": package, "name": name, "fields": fields}).get("credential", {})
 
-    def link_account(self, account_id: int, device: Any = None) -> Dict[str, Any]:
-        """Link an account to a phone (one account per app per phone), or unlink with device=None."""
-        dev = device.name if isinstance(device, Device) else device
-        return self.request("POST", f"accounts/{int(account_id)}/link", json={"device": dev})
+    def set_credential_field(self, credential_id: int, type: str, value: str) -> Dict[str, Any]:
+        return self.request("POST", f"credentials/{int(credential_id)}/fields", json={"type": type, "value": value}).get("credential", {})
 
-    def add_via_instagram(self, instagram_id: int, platform: str) -> Dict[str, Any]:
-        """Facebook (com.facebook.katana) or Threads (com.instagram.barcelona) that signs in through this Instagram account:
-        no password, always on the Instagram's phone; a group login step with it runs the sign-in through Instagram
-        (a Facebook not registered yet is created through Instagram)."""
-        return self.request("POST", f"accounts/{int(instagram_id)}/via", json={"platform": platform}).get("account", {})
+    def delete_credential_field(self, credential_id: int, type: str) -> Dict[str, Any]:
+        return self.request("DELETE", f"credentials/{int(credential_id)}/fields/{type}")
 
-    def texts(self, type: str = "") -> Dict[str, List[Dict[str, Any]]]:
-        """Saved texts by type: caption, comment, bio, name, username."""
-        return self.request("GET", "texts", params={"type": type} if type else None).get("texts", {})
+    def delete_credential(self, credential_id: int) -> Dict[str, Any]:
+        return self.request("DELETE", f"credentials/{int(credential_id)}")
 
-    def add_texts(self, type: str, texts: List[str]) -> int:
-        return int(self.request("POST", "texts", json={"type": type, "texts": list(texts)}).get("added", 0))
+    # -- webhooks: Clousd calls your server when a task ends or a phone has a problem -------------------------------
+    def webhooks(self) -> Dict[str, Any]:
+        """{webhooks: [id, url, events, description, enabled, last…], events: the event names you can subscribe to}."""
+        return self.request("GET", "webhooks")
 
+    def add_webhook(self, url: str, events: Optional[List[str]] = None, description: str = "") -> Dict[str, Any]:
+        """Subscribe an https URL (empty events = all). Returns {webhook, secret}: keep the secret - it is shown once and
+        signs every delivery (header X-Clousd-Signature: t=<time>,v1=HMAC-SHA256(secret, "<time>.<body>"))."""
+        return self.request("POST", "webhooks", json={"url": url, "events": list(events or []), "description": description})
+
+    def rotate_webhook_secret(self, webhook_id: str) -> Dict[str, Any]:
+        return self.request("POST", f"webhooks/{webhook_id}/rotate", json={})
+
+    def toggle_webhook(self, webhook_id: str) -> Dict[str, Any]:
+        return self.request("POST", f"webhooks/{webhook_id}/toggle", json={})
+
+    def test_webhook(self, webhook_id: str) -> Dict[str, Any]:
+        """Send a test event now: {ok, status, ms, error}."""
+        return self.request("POST", f"webhooks/{webhook_id}/test", json={}, timeout=30)
+
+    def webhook_deliveries(self, webhook_id: str) -> List[Dict[str, Any]]:
+        return self.request("GET", f"webhooks/{webhook_id}/deliveries").get("deliveries", [])
+
+    def delete_webhook(self, webhook_id: str) -> Dict[str, Any]:
+        return self.request("DELETE", f"webhooks/{webhook_id}")
+
+    # -- media library ------------------------------------------------------------------------------------------
     def media(self, kind: str = "") -> List[Dict[str, Any]]:
-        """The media library: id, kind (image | video), title, size. Publish one in a group with
-        {"op": "publish", "package": ..., "text": "post", "media_id": id, "caption": ...}."""
+        """The media library (Settings → Storage): id, kind (image | video), title, size."""
         return self.request("GET", "media", params={"kind": kind} if kind else None).get("media", [])
 
     def upload_media(self, data: Any, name: str = "", folder: Optional[int] = None) -> Dict[str, Any]:
@@ -301,22 +356,128 @@ class Job:
             raise ClousdError(500, "job_failed", self.output.strip()[-500:])
         return self
 
-    @property
-    def results(self) -> Dict[str, Any]:
-        """For a job from run()/run_recipe(): device → {state: waiting | running | done | failed, steps: [...]}."""
-        try:
-            import json as _json
-            return _json.loads(self.output or "{}").get("per_phone", {}) or {}
-        except ValueError:
-            return {}
-
-    @property
-    def failed(self) -> List[str]:
-        """Devices whose steps failed (run()/run_recipe())."""
-        return [d for d, r in self.results.items() if r.get("state") == "failed"]
-
     def __repr__(self) -> str:
         return f"<Job {self.id} {self.state}>"
+
+
+class Run:
+    """A task on a phone. `status`: queued, running, paused (waiting for an answer, see `card`), completed, failed,
+    cancelled. A run on several phones is a parent: `children` are the runs of each phone."""
+
+    DONE = ("completed", "failed", "cancelled")
+
+    def __init__(self, client: Clousd, data: Dict[str, Any], children: Optional[List[Dict[str, Any]]] = None):
+        self.client, self.data = client, data or {}
+        self._kids = [Run(client, k) for k in children if k.get("id")] if children else None
+
+    id = property(lambda self: self.data.get("id", ""))
+    status = property(lambda self: self.data.get("status", ""))
+    device = property(lambda self: self.data.get("device", ""))
+    answer = property(lambda self: self.data.get("answer", ""))
+    error = property(lambda self: self.data.get("error", ""))
+    card = property(lambda self: self.data.get("card"))
+    structured_output = property(lambda self: self.data.get("structured_output"))
+    done = property(lambda self: self.status in Run.DONE)
+
+    @property
+    def children(self) -> List["Run"]:
+        if self._kids is None:
+            self._kids = [Run(self.client, {"id": i}) for i in self.data.get("children") or []]
+        return self._kids
+
+    def refresh(self) -> "Run":
+        if self.id:
+            self.data = self.client.request("GET", f"runs/{self.id}").get("run", self.data)
+        return self
+
+    def wait(self, timeout: float = 1800, every: float = 3.0) -> "Run":
+        """Poll until the run has finished (a parent - until every phone has). A paused run waits for answer(); this
+        returns as soon as it pauses so you can answer the card, then call wait() again."""
+        end = time.time() + timeout
+        self.refresh()
+        while not self.done and self.status != "paused":
+            if time.time() > end:
+                raise ClousdError(408, "timeout", f"run {self.id} still {self.status} after {int(timeout)} s")
+            time.sleep(every)
+            self.refresh()
+        if self.data.get("children"):
+            self._kids = [Run(self.client, {"id": i}).refresh() for i in self.data["children"]]
+        return self
+
+    def events(self, since: int = 0) -> Iterator[Dict[str, Any]]:
+        """Live events of a one-phone run, as they happen: {n, event, data} with event status | step | plan | card |
+        answer | message | log | end. Ends after `end` (the run has finished). Start from `since` to resume."""
+        url = self.client.base_url + f"/runs/{self.id}/events"
+        last = since
+        for attempt in range(20):
+            try:
+                with self.client._http.get(url, params={"since": last}, stream=True, timeout=(15, 60)) as r:
+                    if r.status_code >= 400:
+                        raise ClousdError(r.status_code, "error", r.text.strip()[:300])
+                    ev: Dict[str, Any] = {}
+                    for line in r.iter_lines(decode_unicode=True):
+                        if line is None:
+                            continue
+                        if line == "":
+                            if "event" in ev:
+                                try:
+                                    ev["data"] = _json.loads(ev.get("data") or "null")
+                                except ValueError:
+                                    pass
+                                last = max(last, int(ev.get("n") or last))
+                                yield ev
+                                if ev["event"] == "end":
+                                    return
+                            ev = {}
+                            continue
+                        if line.startswith(":"):
+                            continue
+                        k, _, v = line.partition(":")
+                        v = v[1:] if v.startswith(" ") else v
+                        if k == "id":
+                            ev["n"] = int(v) if v.isdigit() else v
+                        elif k == "event":
+                            ev["event"] = v
+                        elif k == "data":
+                            ev["data"] = (ev.get("data", "") + "\n" + v) if "data" in ev else v
+                if self.refresh().done:
+                    return
+            except requests.RequestException:
+                if attempt == 19:
+                    raise
+                time.sleep(min(2 + attempt, 10))
+
+    def trajectory(self) -> List[Dict[str, Any]]:
+        """Every step: goal, action, result and whether a screenshot was kept (step_image(n))."""
+        return self.client.request("GET", f"runs/{self.id}/trajectory").get("steps", [])
+
+    def step_image(self, n: int) -> bytes:
+        return self.client.request("GET", f"runs/{self.id}/steps/{int(n)}.jpg", raw=True)
+
+    def reply(self, answer: Optional[str] = None, allow: Optional[bool] = None) -> "Run":
+        """Answer the run's card: a question (`answer` - text or one of card["options"]) or a permission (`allow`)."""
+        card = self.card or self.refresh().card
+        if not card:
+            raise ClousdError(409, "no_card", "the run is not waiting for an answer")
+        body: Dict[str, Any] = {"card": card.get("id", "")}
+        if allow is not None:
+            body["allow" if allow else "decline"] = True
+        else:
+            body["answer"] = answer or ""
+        self.client.request("POST", f"runs/{self.id}/answer", json=body)
+        return self.refresh()
+
+    def message(self, text: str) -> "Run":
+        """Tell the running agent something; it reads it before its next step."""
+        self.client.request("POST", f"runs/{self.id}/message", json={"text": text})
+        return self
+
+    def cancel(self) -> "Run":
+        self.client.request("POST", f"runs/{self.id}/cancel", json={})
+        return self.refresh()
+
+    def __repr__(self) -> str:
+        return f"<Run {self.id} {self.status}>"
 
 
 class Device:
@@ -578,39 +739,10 @@ class Device:
         """New IP on the same exit."""
         return self.client.request("POST", self._p("network/rotate"), json={}, timeout=120)
 
-    # -- recipes: app scenarios as data, and recording them from the live screen --------------------------------
-    def recipe(self, package: str = "", action: str = "", recipe: Optional[Dict[str, Any]] = None,
-               vars: Optional[Dict[str, str]] = None, wait: bool = True, timeout: float = 1800) -> Any:
-        """Run a recipe: a built-in one (package + action, e.g. "warm") or your own `recipe` dict {app, steps}
-        (a recorded draft). The run is started as a job and polled, so a dropped connection never starts it twice.
-        Returns {ok, output, job}; with wait=False the Job itself. Raises ClousdError when the recipe fails."""
-        body: Dict[str, Any] = {"vars": vars or {}, "async": True}
-        if recipe is not None:
-            body["recipe"] = recipe
-            if package:
-                body["package"] = package
-        else:
-            body.update(package=package, action=action)
-        job = self.client._job(self.client.request("POST", self._p("recipe"), json=body), wait, timeout)
-        if not wait:
-            return job
-        out = str(job.output or "")
-        ok = job.state != "failed" and not out.startswith("step ") and "failed" not in out.lower()[:60]
-        if job.state == "failed":
-            raise ClousdError(500, "recipe_failed", out[:300])
-        return {"ok": ok, "output": out, "job": job.id}
-
-    def record_start(self) -> Dict[str, Any]:
-        """Start recording: what is done on this phone (live view, API) becomes recipe steps."""
-        return self.client.request("POST", self._p("record"), json={"op": "start"})
-
-    def record_status(self) -> Dict[str, Any]:
-        """{active, count, events, tree_ready}: wait for tree_ready before the next tap to get an exact selector."""
-        return self.client.request("GET", self._p("record"))
-
-    def record_stop(self, save: bool = True) -> Dict[str, Any]:
-        """Stop recording: {recipe: the draft, file}. Run the draft with recipe(recipe=...)."""
-        return self.client.request("POST", self._p("record"), json={"op": "stop", "save": save})
+    # -- tasks -----------------------------------------------------------------------------------------------------
+    def run(self, task: str, **kw: Any) -> Run:
+        """A task on this phone in plain words (same options as Clousd.run)."""
+        return self.client.run(task, device=self, **kw)
 
     # -- state between runs ------------------------------------------------------------------------------------
     def snapshots(self) -> List[Dict[str, Any]]:

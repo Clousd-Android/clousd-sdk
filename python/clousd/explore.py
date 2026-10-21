@@ -1,4 +1,4 @@
-"""Walk the screens of an app and write a map of it plus a draft app pack (named elements and likely popups).
+"""Walk the screens of an app and write a map of it: screens, how they connect, named elements and likely popups.
 
     from clousd.explore import explore
     graph = explore(phone, "com.android.settings", depth=2)
@@ -9,8 +9,8 @@ outward-facing (delete, send, pay, sign out, ...) are never tapped. After every 
 where it should be; if not, it reopens the app and replays the path from the start.
 
 The result: {"package", "screens": [{id, activity, labels, elements}], "edges": [{from, to, via}],
-"app_pack": {"package", "elements": {name: [selector, ...]}, "popups": [...]}} - the app pack is a draft for
-gateway recipes (selectors by resource-id, then by text), to be reviewed by a person.
+"app_pack": {"package", "elements": {name: [selector, ...]}, "popups": [...]}} - named elements and likely popups
+(selectors by resource-id, then by text), a starting point for your own scripts.
 """
 from __future__ import annotations
 

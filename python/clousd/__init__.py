@@ -1,5 +1,5 @@
 """CLOUSD: cloud Android phones modelled on real devices, for people, scripts and AI agents."""
-from .client import Clousd, ClousdError, Device, Job
+from .client import Clousd, ClousdError, Device, Job, Run
 
-__all__ = ["Clousd", "ClousdError", "Device", "Job"]
-__version__ = "0.3.2"
+__all__ = ["Clousd", "ClousdError", "Device", "Job", "Run"]
+__version__ = "1.0.0"

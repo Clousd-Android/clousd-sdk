@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clousd"
-version = "0.3.2"
+version = "1.0.0"
 description = "Cloud Android phones modelled on real devices: API client for scripts and AI agents"
 readme = "README.md"
 requires-python = ">=3.9"

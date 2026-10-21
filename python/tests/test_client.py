@@ -25,6 +25,7 @@ def tiny_png(w, h):
 class Fake(BaseHTTPRequestHandler):
     calls = []
     job_polls = 0
+    run_polls = 0
     rate_limited_once = False
 
     def log_message(self, *a):
@@ -61,14 +62,19 @@ class Fake(BaseHTTPRequestHandler):
                                     "image": {"w": 540, "h": 1200, "format": "jpeg", "data": base64.b64encode(b"JPEGDATA").decode()},
                                     "package": "com.android.settings", "activity": "com.android.settings.Settings",
                                     "ui": [{"text": "Wi-Fi", "class": "TextView", "b": [0, 100, 540, 200], "click": True}]})
-        if p == "/v1/recipes":
-            return self._send(200, {"recipes": [
-                {"package": "com.instagram.android", "app": "Instagram", "action": "warm", "inputs": [], "status": "tested"},
-                {"package": "com.reddit.frontpage", "app": "Reddit", "action": "login", "inputs": [], "status": "beta"}]})
-        if p == "/v1/jobs/g1":
-            out = {"per_phone": {"t1": {"state": "done", "steps": [{"op": "recipe", "ok": True}]},
-                                 "t2": {"state": "failed", "steps": [{"op": "recipe", "ok": False, "output": "no feed"}]}}}
-            return self._send(200, {"job": {"id": "g1", "state": "failed", "output": json.dumps(out)}})
+        if p.startswith("/v1/runs/r1/events"):
+            ev = ("id: 1\nevent: step\ndata: {\"n\": 1, \"tool\": \"tap\", \"result\": \"ok\"}\n\n"
+                  ": ping\n\n"
+                  "id: 2\nevent: end\ndata: {\"status\": \"completed\"}\n\n").encode()
+            return self._send(200, raw=ev, ctype="text/event-stream")
+        if p == "/v1/runs/r1":
+            Fake.run_polls += 1
+            st = "completed" if Fake.run_polls >= 2 else "running"
+            return self._send(200, {"run": {"id": "r1", "device": "t1", "status": st, "answer": "Android 15" if st == "completed" else ""}})
+        if p == "/v1/runs/r2":
+            return self._send(200, {"run": {"id": "r2", "status": "paused", "card": {"id": "c1", "kind": "question", "question": "Which?"}}})
+        if p.startswith("/v1/credentials"):
+            return self._send(200, {"credentials": [{"id": 4, "package": "com.example", "name": "work", "fields": ["username", "password"]}]})
         if p == "/v1/jobs/j1":
             Fake.job_polls += 1
             return self._send(200, {"job": {"id": "j1", "state": "done" if Fake.job_polls >= 2 else "running"}})
@@ -87,8 +93,10 @@ class Fake(BaseHTTPRequestHandler):
         if p == "/v1/devices/t1/act":
             return self._send(200, {"ok": True, "output": "", "seq": 7, "stale": body.get("seq", 7) != 7,
                                     "settled": True, "waited_ms": 600})
-        if p == "/v1/groups":
-            return self._send(202, {"ok": True, "job": {"id": "g1", "state": "running"}})
+        if p == "/v1/runs":
+            return self._send(201, {"ok": True, "run": {"id": "r1", "device": "t1", "status": "queued"}})
+        if p == "/v1/runs/r2/answer":
+            return self._send(200, {"ok": True})
         if p == "/v1/devices/t1/snapshots/v3/restore":
             return self._send(202, {"ok": True, "job": {"id": "j1", "state": "running"}})
         return self._send(400, {"error": "bad_request", "message": "op"})
@@ -143,21 +151,31 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(Fake.calls[-1][2], {"op": "tap", "settle": True, "x": 270, "y": 150, "seq": 7})
         self.assertEqual((r["settled"], r["stale"]), (True, False))
 
-    def test_recipes_filter(self):
-        self.assertEqual([r["action"] for r in self.c.recipes("instagram")], ["warm"])
-        self.assertEqual(len(self.c.recipes()), 2)
+    def test_run_task(self):
+        run = self.c.run("Tell me the Android version", device="t1", credentials=[{"package": "com.example", "name": "work", "id": 4}],
+                         output_schema={"type": "object"}, idempotency_key="k1")
+        call = [c for c in Fake.calls if c[1] == "/v1/runs"][-1]
+        self.assertEqual(call[2], {"task": "Tell me the Android version", "model": {"provider": "clousd"}, "source": "sdk",
+                                   "device": "t1", "options": {"mode": "auto", "output_schema": {"type": "object"}},
+                                   "credentials": [{"package": "com.example", "name": "work"}]})
+        self.assertEqual((run.id, run.status), ("r1", "queued"))
+        run.wait(timeout=30, every=0.01)
+        self.assertEqual((run.status, run.answer), ("completed", "Android 15"))
 
-    def test_run_recipe_on_many(self):
-        job = self.c.run_recipe(["t1", self.c.device("t2")], "com.instagram.android", "warm", {"seconds": 900},
-                                stagger=[10, 30], vars_by_device={"t2": {"comments": "Nice"}}, timeout=30)
-        body = [c for c in Fake.calls if c[1] == "/v1/groups"][-1][2]
-        self.assertEqual(body, {"phones": ["t1", "t2"], "stagger": [10, 30],
-                                "steps": [{"op": "recipe", "package": "com.instagram.android", "action": "warm",
-                                           "vars": {"seconds": "900"}}],
-                                "vars_by_phone": {"t2": {"comments": "Nice"}}})
-        self.assertEqual(job.state, "failed")   # one phone failed: no exception, the per-device result tells
-        self.assertEqual(job.failed, ["t2"])
-        self.assertEqual(job.results["t1"]["state"], "done")
+    def test_run_events(self):
+        evs = list(self.c.get_run("r1").events())
+        self.assertEqual([e["event"] for e in evs], ["step", "end"])
+        self.assertEqual(evs[0]["data"]["tool"], "tap")
+        self.assertEqual(evs[1]["n"], 2)
+
+    def test_reply_to_card(self):
+        run = self.c.get_run("r2")
+        run.reply("the first one")
+        self.assertEqual(Fake.calls[-2][2], {"card": "c1", "answer": "the first one"})
+
+    def test_credentials_list(self):
+        self.assertEqual(self.c.credentials("com.example")[0]["name"], "work")
+        self.assertIn("package=com.example", Fake.calls[-1][1])
 
     def test_type_any_language(self):
         self.c.device("t1").type("こんにちは")

@@ -1,31 +1,29 @@
-"""MCP server for CLOUSD cloud phones: gives any MCP-capable agent a real Android phone to look at and act on.
+"""MCP server for CLOUSD cloud phones: gives any MCP-capable agent real Android phones in the cloud.
 
-Ten tools (a few large tools are easier for a model to choose from than dozens of small ones):
-  devices   - list the phones this key can use, start or stop one
-  observe   - the screen as an image with a number on every element, plus the elements as text
-  act       - tap (by element number or point), long_press, swipe, scroll, type, key, open_app, close_app, open_url,
-              tap_text, wait_text, intent, settings, clipboard_set, notifications_open / _close / _clear
-  inspect   - read without touching the screen: notifications, clipboard, app info, crashes, health, installed apps
-  snapshots - list, save, restore (reset between runs) or clone a phone
-  recipe    - run an app recipe (built-in or your own steps) and record new ones from what is done on the phone
-  fleet     - many phones in one call: list the built-in recipes, run a recipe or steps on up to 32 phones, follow progress
-  network   - where phones go online: exit types and countries, the account's proxies, add your own, bind, new IP
-  resources - saved accounts (no secrets), texts, the media library; upload and send files to phones
-  account   - the balance, spend per day, hours left, renewals and warnings to tell the user
+Nine tools (a few clear tools are easier for a model to choose from than dozens of small ones):
+  account     - the plan, phones, money and warnings to tell the user
+  devices     - the phones this key can use; start, stop or rename one
+  run         - give one or many phones a task in plain words; Clousd's agent does it and answers
+  run_status  - follow a run: status, the last steps, the answer, a question it waits on
+  answer      - answer a run's question or allow / decline the step it asks about
+  observe     - the screen as an image with a number on every element, plus the elements as text
+  act         - tap, type, swipe, open apps... on the screen yourself; also read notifications, clipboard, app info
+  credentials - saved logins (names and which fields are set, never values) to pass to run
+  schedules   - tasks that run by themselves at a time on days of the week
 
 Screenshots come back `SHOT_WIDTH` px wide (540: ~1200 px long side on a 1080x2400 phone). act takes an element
 number from the last observe, or coordinates in that screenshot; both are converted to the device here.
 
     CLOUSD_API_KEY=cl_live_... clousd-mcp          # stdio server
+    CLOUSD_MCP_HTTP=127.0.0.1:8790 clousd-mcp      # remote server: every request carries Authorization: Bearer …
 """
 from __future__ import annotations
 
-import base64
 import contextvars
 import json
 import os
 import time
-from typing import Annotated, Any, Dict, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from pydantic import Field
 
@@ -44,46 +42,41 @@ except ImportError:   # clousd < 0.2: plain screenshot, elements numbered here
     _elements_of = None
 
 SHOT_WIDTH = int(os.environ.get("CLOUSD_SHOT_WIDTH", "540"))
-_width: contextvars.ContextVar = contextvars.ContextVar("clousd_shot_width", default=0)   # per request (remote: ?shotWidth=)
+SITE = os.environ.get("CLOUSD_SITE_URL", "https://clousd.com").rstrip("/")
+RESOURCE_META = os.environ.get("CLOUSD_MCP_RESOURCE_META", "https://api.clousd.com/.well-known/oauth-protected-resource")
+WAIT_MAX = 50   # seconds a tool call may wait for a run (remote clients time out around a minute)
 
 
 def shot_width() -> int:
-    """Screenshot width for this request: `shotWidth` from the client's configuration (query or config JSON over
-    HTTP), else CLOUSD_SHOT_WIDTH, else 540. Clamped to 240..1080."""
-    w = _width.get() or SHOT_WIDTH
-    return max(240, min(int(w), 1080))
+    """Screenshot width: CLOUSD_SHOT_WIDTH, else 540. Clamped to 240..1080."""
+    return max(240, min(int(SHOT_WIDTH), 1080))
 
-mcp = _Server("clousd", instructions="Real Android phones in the cloud. Start by checking money with account op=balance "
-              "and tell the user its warnings (hours left, proxy traffic cost, renewals) with the top-up link; actions that "
-              "spend money return a money note when the balance is low - always pass it on. For app tasks (sign in, warm up an account, "
-              "publish, delete a post) first look at fleet op=recipes and run a recipe - it waits for the right screens and "
-              "handles popups; tap step by step with observe/act only when no recipe fits. For several phones use one "
-              "fleet op=run for all of them (it runs them in parallel and returns a job), never a loop of act calls. "
-              "Exits and proxies: network (bind a proxy to phones, add the user's own proxy, new IP); saved accounts, texts and "
-              "media: resources - sign in with an account id, never ask the user for passwords. "
-              "Call observe before acting and act on element numbers from it; use inspect to read notifications, app "
-              "versions or crashes without touching the screen; use snapshots restore to start each run from the same state.")
+
+mcp = _Server("clousd", instructions="Real Android phones in the cloud. Start with account (tell the user its warnings with "
+              "the link) and devices. To get something done on a phone, give it the goal in plain words with run - Clousd's "
+              "agent works the screen and answers; follow it with run_status and reply to its questions with answer. For "
+              "several phones put them all in one run (they work in parallel) - never loop over phones. Never ask the user "
+              "for passwords: pass a saved login from credentials to run; its values are typed without anyone seeing them. "
+              "Use observe and act only when you want to drive the screen yourself step by step. Repeating work goes to "
+              "schedules.")
 _clients: Dict[str, Clousd] = {}   # API key → client (one per key; the remote server serves many keys)
 _key: contextvars.ContextVar = contextvars.ContextVar("clousd_key", default="")
 _scale: Dict[str, float] = {}      # device → device pixels per screenshot pixel
 _els: Dict[str, Dict[str, Any]] = {}   # key+device → {seq, pts:[(cx, cy, label)]} of the last observe
 
-Device_ = Annotated[str, Field(description="Device from devices (op=list): its name, its label from the dashboard (e.g. \"Anna IG\" or \"Pixel 7 #3\") or its number")]
+Device_ = Annotated[str, Field(description="Device from devices: its name, its label from the dashboard (e.g. \"Pixel 7 #3\") or its number")]
 
 
 def _use(ctx: Optional[Context]) -> None:
-    """Remember which API key this request carries. Over HTTP (the remote server at api.clousd.com/mcp) the key comes
-    with every request: `Authorization: Bearer cl_live_…`, `X-API-Key`, or `?api_key=` / `?clousdApiKey=` /
-    `?config=<base64 JSON with clousdApiKey>` for clients that pass configuration in the URL. Over stdio there is no
-    request and the key is CLOUSD_API_KEY from the environment."""
+    """Remember which API key this request carries. Over HTTP (api.clousd.com/mcp) only the header counts:
+    `Authorization: Bearer <cl_live_… key or OAuth token>` - keys in the address are refused (they end up in logs and
+    histories). Over stdio there is no request and the key is CLOUSD_API_KEY from the environment."""
     key = ""
-    req = None
     try:
         req = getattr(ctx.request_context, "request", None) if ctx is not None else None
     except Exception:   # stdio: no request context at all
         req = None
     try:
-        # mcp 2.x: ctx.headers; mcp 1.x: only the transport request carries them
         h = getattr(ctx, "headers", None) if ctx is not None else None
         if h is None and req is not None:
             h = getattr(req, "headers", None)
@@ -91,30 +84,9 @@ def _use(ctx: Optional[Context]) -> None:
             auth = h.get("authorization", "") or h.get("Authorization", "")
             if auth.lower().startswith("bearer "):
                 key = auth[7:].strip()
-            key = key or h.get("x-api-key", "") or h.get("X-API-Key", "")
-    except Exception:
-        key = ""
-    width = 0
-    try:
-        q = getattr(req, "query_params", None)
-        if q:
-            try:
-                width = int(q.get("shotWidth", "") or q.get("shot_width", "") or 0)
-            except ValueError:
-                width = 0
-        if not key and q:
-            key = q.get("api_key", "") or q.get("clousdApiKey", "") or q.get("CLOUSD_API_KEY", "")
-            if not key and q.get("config"):
-                try:
-                    cfg = json.loads(base64.b64decode(q["config"] + "=" * (-len(q["config"]) % 4)))
-                    key = cfg.get("clousdApiKey") or cfg.get("CLOUSD_API_KEY") or cfg.get("api_key") or ""
-                    width = width or int(cfg.get("shotWidth") or 0)
-                except Exception:
-                    key = ""
     except Exception:
         key = ""
     _key.set(key)
-    _width.set(width)
 
 
 def client() -> Clousd:
@@ -133,8 +105,8 @@ _names: Dict[str, Any] = {}   # key → (time, {name}, {label / number → name}
 
 
 def _resolve(device: str) -> str:
-    """A device by its API name, its name in the dashboard ("Anna IG", "Pixel 7 #3", case-insensitive) or its number
-    ("3", "#3"). Unknown values pass through and the API answers 404."""
+    """A device by its API name, its name in the dashboard ("Pixel 7 #3", case-insensitive) or its number ("3", "#3").
+    Unknown values pass through and the API answers 404."""
     d = (device or "").strip()
     if not d:
         return d
@@ -162,6 +134,15 @@ def _resolve(device: str) -> str:
     if d in names:
         return d
     return labels.get(d.lower(), d)
+
+
+def _devs(raw: Any) -> List[str]:
+    if isinstance(raw, list):
+        return [_resolve(str(x)) for x in raw]
+    raw = str(raw or "").strip()
+    if raw.startswith("["):
+        return [_resolve(str(x)) for x in json.loads(raw)]
+    return [_resolve(x.strip()) for x in raw.split(",") if x.strip()]
 
 
 def _slot(device: str) -> str:
@@ -209,30 +190,36 @@ def _err(e: Exception) -> str:
     return f"error: {e}"
 
 
+# ---- account and devices ------------------------------------------------------------------------------------------
+
+@mcp.tool(annotations=ToolAnnotations(title="Account", readOnlyHint=True, openWorldHint=False))
+def account(ctx: Optional[Context] = None) -> Dict[str, Any]:
+    """The account: plan and phones, money left, what is about to renew, and warnings. Check it before starting phones
+    or long work, and tell the user every warning in plain words with the top_up link."""
+    _use(ctx)
+    try:
+        return client().balance()
+    except ClousdError as e:
+        return {"error": _err(e)}
+
+
 @mcp.tool(annotations=ToolAnnotations(title="Devices", readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
 def devices(op: Annotated[str, Field(description="list (default) | start | stop | rename")] = "list",
             device: Annotated[str, Field(description="device (name, label or number), for start / stop / rename")] = "",
             label: Annotated[str, Field(description="rename: the new name, up to 40 characters")] = "",
             ctx: Optional[Context] = None) -> Dict[str, Any]:
-    """Phones this API key can use.
-    op=list: name, label (the name people see in the dashboard, e.g. "Anna IG" or "Pixel 7 #3"), number, state (running /
-    stopped / starting), model, Android version, network exit, the app accounts linked to it and its proxy_id. Every
-    tool takes the name, the label or the number. op=rename with device and label: give a phone a name (empty = back to
-    "Model #N"); name phones after their accounts to keep a fleet readable.
-    op=start / op=stop with `device`: start a stopped phone (waits until it has booted, one to three minutes) or stop
-    one (a stopped phone keeps its state and costs nothing)."""
+    """Phones this key can use.
+    op=list: name, label (the name people see in the dashboard, e.g. "Pixel 7 #3"), number, state (running / stopped /
+    starting), model, Android version and network exit. Every tool takes the name, the label or the number.
+    op=start / op=stop with device: start a stopped phone (one to three minutes until it has booted) or stop one (it keeps
+    its apps and data). op=rename with device and label: give a phone a name (empty = back to "Model #N")."""
     _use(ctx)
     try:
         if op == "list":
             return {"devices": [d.data for d in client().devices()]}
         if op in ("start", "stop") and device:
             d = client().device(_resolve(device))
-            out: Dict[str, Any] = {"result": (d.start() if op == "start" else d.stop()).output or "ok"}
-            if op == "start":
-                note = _money_note()
-                if note:
-                    out["money"] = note   # tell the user: balance, hours left, top-up link
-            return out
+            return {"result": (d.start() if op == "start" else d.stop()).output or "ok"}
         if op == "rename" and device:
             r = client().device(_resolve(device)).rename(label)
             _names.pop(_key.get() or "env", None)
@@ -241,6 +228,158 @@ def devices(op: Annotated[str, Field(description="list (default) | start | stop 
     except ClousdError as e:
         return {"error": _err(e)}
 
+
+# ---- tasks ------------------------------------------------------------------------------------------------------
+
+def _replay(run_id: str) -> str:
+    return f"{SITE}/app/?run={run_id}"
+
+
+def _run_view(run: Any, steps: int = 0) -> Dict[str, Any]:
+    """What a model needs from a run: status, the answer or the question it waits on, and where to look."""
+    d = run.data
+    out: Dict[str, Any] = {"run": run.id, "status": run.status}
+    for k in ("device", "answer", "error", "structured_output", "steps", "seconds", "subgoal"):
+        if d.get(k) not in (None, "", 0):
+            out[k] = d[k]
+    card = d.get("card")
+    if card:
+        out["waiting_for"] = {k: v for k, v in card.items() if k in ("kind", "question", "options", "action", "allow_text")}
+        out["next"] = "answer: reply with answer(run, text) or allow / decline"
+    if d.get("children"):
+        kids: Dict[str, Any] = {}
+        try:
+            for r in client().runs(since=d.get("created", ""), limit=200):
+                if r.data.get("parent") == run.id:
+                    k = {"run": r.id, "status": r.status}
+                    if r.answer or r.error:
+                        k["answer" if r.answer else "error"] = r.answer or r.error
+                    if r.data.get("card"):
+                        k["waiting_for"] = r.data["card"].get("question") or r.data["card"].get("action")
+                    kids[r.data.get("device", r.id)] = k
+        except ClousdError:
+            pass
+        out["devices"] = kids
+        counts: Dict[str, int] = {}
+        for k in kids.values():
+            counts[k["status"]] = counts.get(k["status"], 0) + 1
+        out["counts"] = counts
+    if steps and not d.get("children"):
+        try:
+            tr = run.trajectory()[-steps:]
+            out["last_steps"] = [f"{s.get('n')}. {s.get('tool', '')} {s.get('target', '')} - {str(s.get('result', ''))[:160]}".strip()
+                                 for s in tr]
+        except ClousdError:
+            pass
+    if not run.done and not card:
+        out["next"] = "still working - call run_status with this run in 20-60 s"
+    out["replay"] = _replay(run.id)
+    return out
+
+
+def _wait(run: Any, seconds: int) -> Any:
+    end = time.time() + max(0, min(int(seconds), WAIT_MAX))
+    while time.time() < end:
+        run.refresh()
+        if run.done or run.status == "paused":
+            break
+        time.sleep(3)
+    return run
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Run a task", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True))
+def run(task: Annotated[str, Field(description="the goal in plain words, e.g. \"Open Settings and tell me the Android version\" or "
+                                               "\"Sign in to the app with the saved login and open the profile\"")],
+        devices: Annotated[str, Field(description="one device or several: names, labels or numbers, comma-separated or a JSON list (up to 32)")],
+        credentials: Annotated[str, Field(description="saved logins to use: \"package/name\" items, comma-separated, from the credentials tool")] = "",
+        output_schema: Annotated[str, Field(description="optional JSON Schema: the answer also comes back as structured_output in this shape")] = "",
+        mode: Annotated[str, Field(description="auto (default): works without stopping; ask: asks before risky steps (answer them)")] = "auto",
+        max_steps: Annotated[int, Field(description="step limit, default 100")] = 0,
+        wait_seconds: Annotated[int, Field(description=f"wait up to this long for the result, 0..{WAIT_MAX}")] = 40,
+        ctx: Optional[Context] = None) -> Dict[str, Any]:
+    """Give phones a task. Clousd's agent looks at the screen, taps and types until the goal is reached, and finishes with
+    an answer. Several devices = the same task on each, all at once (one run per phone under one parent). Returns the
+    run with its status; if it is still going, follow it with run_status. A run in mode=ask may stop with waiting_for:
+    reply with answer. Logins: never ask the user for passwords - pass credentials; their values are typed on the phone
+    without you or the model seeing them."""
+    _use(ctx)
+    try:
+        names = _devs(devices)
+        if not names:
+            return {"error": "devices: at least one device (see the devices tool)"}
+        if len(names) > 32:
+            return {"error": f"{len(names)} devices: up to 32 per run - split into several runs"}
+        creds = []
+        for x in [c.strip() for c in credentials.split(",") if c.strip()]:
+            if "/" not in x:
+                return {"error": f"credentials: \"package/name\" items, got {x!r}"}
+            pk, nm = x.split("/", 1)
+            creds.append({"package": pk.strip(), "name": nm.strip()})
+        schema = json.loads(output_schema) if output_schema.strip() else None
+        r = client().run(task, device=names[0] if len(names) == 1 else None, devices=names if len(names) > 1 else None,
+                         credentials=creds or None, output_schema=schema, mode=mode if mode in ("auto", "ask") else "auto",
+                         max_steps=max_steps or None)
+        return _run_view(_wait(r, wait_seconds), steps=5)
+    except (ClousdError, ValueError) as e:
+        return {"error": _err(e)}
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Run status", readOnlyHint=True, openWorldHint=False))
+def run_status(run: Annotated[str, Field(description="run id from run (or runs listed with op=list)")] = "",
+               op: Annotated[str, Field(description="status (default) | list | cancel | message")] = "status",
+               text: Annotated[str, Field(description="message: what to tell the running agent")] = "",
+               wait_seconds: Annotated[int, Field(description=f"status: wait up to this long for it to finish or ask, 0..{WAIT_MAX}")] = 0,
+               steps: Annotated[int, Field(description="status: how many last steps to show, 0..20")] = 5,
+               ctx: Optional[Context] = None) -> Dict[str, Any]:
+    """Follow a run. op=status: status (queued, running, paused = waits for an answer, completed, failed, cancelled), the
+    answer or error, the last steps, per-device results for a run on several phones, and a replay link for the user.
+    op=list: recent runs of this key. op=cancel: stop it. op=message: tell the running agent something (it reads it
+    before its next step)."""
+    _use(ctx)
+    try:
+        c = client()
+        if op == "list":
+            return {"runs": [{"run": r.id, "status": r.status, "device": r.data.get("device") or r.data.get("devices"),
+                              "task": str(r.data.get("task", ""))[:120], "created": r.data.get("created"),
+                              "answer": str(r.answer or r.error)[:200]} for r in c.runs(limit=20)]}
+        if not run:
+            return {"error": "run is required (op=list shows recent runs)"}
+        r = c.get_run(run)
+        if op == "cancel":
+            return _run_view(r.cancel())
+        if op == "message":
+            if not text:
+                return {"error": "message needs text"}
+            r.message(text)
+            return {"ok": True, "run": r.id}
+        if op != "status":
+            return {"error": "op is status, list, cancel or message"}
+        if wait_seconds:
+            _wait(r, wait_seconds)
+        return _run_view(r, steps=max(0, min(int(steps), 20)))
+    except ClousdError as e:
+        return {"error": _err(e)}
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Answer a run", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True))
+def answer(run: Annotated[str, Field(description="run id that waits (status paused, waiting_for)")],
+           text: Annotated[str, Field(description="a question: your answer (or one of its options)")] = "",
+           allow: Annotated[Optional[bool], Field(description="a permission: true to allow the step, false to decline it")] = None,
+           ctx: Optional[Context] = None) -> Dict[str, Any]:
+    """Reply to a run that waits for you: answer its question with text, or allow / decline the step it asks
+    permission for. If the question is something only the user knows, ask the user first. The run goes on at once."""
+    _use(ctx)
+    try:
+        r = client().get_run(run)
+        if allow is None and not text:
+            return {"error": "give text (a question) or allow true/false (a permission)"}
+        r.reply(answer=text if allow is None else None, allow=allow)
+        return _run_view(_wait(r, 10), steps=3)
+    except ClousdError as e:
+        return {"error": _err(e)}
+
+
+# ---- the screen, step by step -------------------------------------------------------------------------------------
 
 def _numbered(o: Dict[str, Any], scale: float) -> tuple:
     """(lines for the model, [(cx, cy, label)] in device pixels, elements for the image) - one numbering for both"""
@@ -271,31 +410,14 @@ def observe(device: Device_,
             with_text: Annotated[bool, Field(description="also list the elements (numbered, centres in image pixels)")] = True,
             numbers: Annotated[bool, Field(description="draw the element numbers on the screenshot")] = True,
             ctx: Optional[Context] = None) -> list:
-    """Look at the phone: a fresh screenshot, the app on screen and (with_text) every labelled or tappable element with
-    a number. Act on an element by its number (act element=N); coordinates, when needed, are in this image's pixels."""
+    """Look at the phone yourself: a fresh screenshot, the app on screen and (with_text) every labelled or tappable element
+    with a number. Act on an element by its number (act element=N); coordinates, when needed, are in this image's pixels."""
     _use(ctx)
     d = client().device(_resolve(device))
     try:
         o = d.observe(width=shot_width(), ui=with_text)
     except ClousdError as e:
-        if e.status != 404:
-            return [_err(e)]
-        o = None   # an older gateway without /observe: screenshot + texts the old way
-    if o is None:
-        try:
-            jpeg = d.screenshot(width=shot_width())
-            w, h = d.size()
-        except ClousdError as e:
-            return [_err(e)]
-        iw = _jpeg_w(jpeg)
-        _scale[device] = w / float(iw)
-        note = f"Screen image {iw}x{int(h / _scale[device])} px (phone {w}x{h})."
-        if with_text:
-            try:
-                note += "\nTexts on screen: " + "; ".join(d.screen_text())
-            except ClousdError as e:
-                note += f"\nTexts on screen: unavailable ({e.message or e.error})"
-        return [Image(data=jpeg, format="jpeg"), note]
+        return [_err(e)]
     img, scr = o.get("image", {}), o.get("screen", {})
     scale = scr.get("w", 1080) / float(img.get("w") or shot_width())
     _scale[device] = scale
@@ -316,8 +438,8 @@ def observe(device: Device_,
     return [Image(data=jpeg, format="jpeg"), note]
 
 
-ACTIONS = ("tap long_press swipe scroll tap_text wait_text type key open_app close_app open_url installed intent settings "
-           "clipboard_set notifications_open notifications_close notifications_clear")
+ACTIONS = ("tap long_press swipe scroll tap_text wait_text type key open_app close_app open_url intent settings clipboard_set "
+           "notifications_open notifications_close notifications_clear | read: installed notifications clipboard app_info crashes health")
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Act on the phone", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True))
@@ -329,20 +451,34 @@ def act(device: Device_,
         x2: Annotated[Optional[float], Field(description="swipe end x")] = None,
         y2: Annotated[Optional[float], Field(description="swipe end y")] = None,
         text: Annotated[str, Field(description="type: the text; key: home|back|recents|enter|tab|del|menu; scroll: down|up; "
-                                                "open_app/close_app: package; open_url: https://...; tap_text/wait_text: text on screen; "
-                                                "settings: wifi|bluetooth|display|sound|apps|location|about|battery|...; "
-                                                "intent: a URI to view (geo:, tel:, https:...) or JSON {action,data,package,component,extras}; "
-                                                "clipboard_set: the text")] = "",
+                                                "open_app/close_app/app_info/crashes: package; open_url: https://...; "
+                                                "tap_text/wait_text: text on screen; settings: wifi|bluetooth|display|sound|apps|"
+                                                "location|about|battery|...; intent: a URI to view (geo:, tel:, https:...) or JSON "
+                                                "{action,data,package,component,extras}; clipboard_set: the text")] = "",
         ms: Annotated[int, Field(description="swipe / long_press duration in ms")] = 300,
         timeout: Annotated[int, Field(description="wait_text: seconds to wait, up to 120")] = 30,
         ctx: Optional[Context] = None) -> str:
-    """Do one thing on the phone, then wait until the screen settles. Prefer element numbers from observe over
-    coordinates; tap_text taps the element whose text contains `text`. Typing goes into the focused field (tap it
-    first) and works in any language. Returns what happened; "the screen did not change" means the action probably
-    missed - observe again."""
+    """Do one thing on the phone yourself, then wait until the screen settles. Prefer element numbers from observe over
+    coordinates; tap_text taps the element whose text contains `text`. Typing goes into the focused field (tap it first)
+    and works in any language. "the screen did not change" means the action probably missed - observe again.
+    Read without touching the screen: installed (apps), notifications (the shade), clipboard, app_info (version,
+    installer, running), crashes (recent app crashes and ANRs), health (running, booted, network exit, last check).
+    For a whole goal, prefer run: it does all the steps for you."""
     _use(ctx)
     d = client().device(_resolve(device))
     try:
+        if action == "installed":
+            return ", ".join(d.installed())
+        if action == "notifications":
+            return json.dumps(d.notifications(), ensure_ascii=False)[:6000]
+        if action == "clipboard":
+            return d.clipboard_get()
+        if action == "app_info":
+            return json.dumps(d.app_info(text), ensure_ascii=False) if text else "error: app_info needs the package in text"
+        if action == "crashes":
+            return json.dumps(d.crashes(text), ensure_ascii=False)[:6000]
+        if action == "health":
+            return json.dumps(d.health(), ensure_ascii=False)[:4000]
         if action in ("tap", "long_press") and element is not None:
             last = _els.get(_slot(device))
             if not last or not 0 <= element < len(last["pts"]):
@@ -373,8 +509,6 @@ def act(device: Device_,
             body = {"op": action, "package": text}
         elif action == "open_url":
             body = {"op": "url", "url": text}
-        elif action == "installed":
-            return ", ".join(d.installed())
         elif action == "settings":
             body = {"op": "settings", "text": text}
         elif action == "intent":
@@ -390,379 +524,126 @@ def act(device: Device_,
         op = body.pop("op")
         try:
             r = d.act(op, settle=True, **body)
-            out = r.get("output") or "ok"
-            if r.get("changed") is False:
-                return out + " (the screen did not change - the action probably missed; observe again)"
-            return out + ("" if r.get("settled", True) else " (screen still changing)")
         except ClousdError as e:
             if e.status == 409 and e.error == "stale":
                 _els.pop(_slot(device), None)
                 return "error: the screen changed since the last observe - call observe again and use its numbers"
-            if e.status != 404:
-                raise
-            body.pop("seq", None)
-            return d.action(op, **body).get("output") or "ok"   # older gateway without /act
+            raise
+        out = r.get("output") or "ok"
+        if r.get("changed") is False:
+            return out + " (the screen did not change - the action probably missed; observe again)"
+        return out + ("" if r.get("settled", True) else " (screen still changing)")
     except (ClousdError, ValueError) as e:
         return _err(e)
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Inspect the phone", readOnlyHint=True, openWorldHint=False))
-def inspect(device: Device_,
-            what: Annotated[str, Field(description="notifications | clipboard | app | crashes | health | installed")],
-            package: Annotated[str, Field(description="app: the package to describe; crashes: only this package")] = "",
-            ctx: Optional[Context] = None) -> Dict[str, Any]:
-    """Read the phone without touching the screen.
-    notifications: the shade as a list (app, title, text, time). clipboard: the clipboard text.
-    app: installed version, install/update time, installer, whether it runs or is on screen.
-    crashes: recent app crashes, native crashes and ANRs with the first lines of the stack.
-    health: running, booted, network exit and the latest automatic check of the phone.
-    installed: packages of apps that can be opened."""
+# ---- logins and schedules -----------------------------------------------------------------------------------------
+
+@mcp.tool(annotations=ToolAnnotations(title="Saved logins", readOnlyHint=True, openWorldHint=False))
+def credentials(package: Annotated[str, Field(description="only logins of this app package (empty = all)")] = "",
+                ctx: Optional[Context] = None) -> Dict[str, Any]:
+    """Saved logins of the account: package, name and which fields are set (username, email, password, phone, totp...).
+    Values are never shown. Pass one to run as "package/name"; the agent types it on the phone without seeing it.
+    The user adds logins in the dashboard (Tasks → Sign-in) - do not ask them for passwords in the chat."""
     _use(ctx)
-    d = client().device(_resolve(device))
     try:
-        if what == "notifications":
-            return {"notifications": d.notifications()}
-        if what == "clipboard":
-            return {"text": d.clipboard_get()}
-        if what == "app":
-            if not package:
-                return {"error": "app needs package"}
-            return {"app": d.app_info(package)}
-        if what == "crashes":
-            return {"crashes": d.crashes(package)}
-        if what == "health":
-            return {"health": d.health()}
-        if what == "installed":
-            return {"packages": d.installed()}
-        return {"error": "what is notifications, clipboard, app, crashes, health or installed"}
+        rows = client().credentials(package)
+        return {"credentials": [{"use": f"{x.get('package', '')}/{x.get('name', '')}", **{k: v for k, v in x.items() if k != "id"}} for x in rows]}
     except ClousdError as e:
         return {"error": _err(e)}
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Snapshots", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
-def snapshots(device: Device_,
-              op: Annotated[str, Field(description="list (default) | save | restore | clone")] = "list",
-              snapshot_id: Annotated[str, Field(description="restore / clone: id from op=list")] = "",
-              new_name: Annotated[str, Field(description="clone: name of the new phone (letters and digits, up to 16)")] = "",
+@mcp.tool(annotations=ToolAnnotations(title="Schedules", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True))
+def schedules(op: Annotated[str, Field(description="list (default) | add | toggle | delete")] = "list",
+              task: Annotated[str, Field(description="add: the task in plain words, like for run")] = "",
+              devices: Annotated[str, Field(description="add: devices, comma-separated or a JSON list")] = "",
+              at: Annotated[str, Field(description="add: time HH:MM")] = "",
+              days: Annotated[str, Field(description="add: days 1-7 (1 = Monday), comma-separated; empty = every day")] = "",
+              tz: Annotated[str, Field(description="add: IANA time zone of `at`, e.g. Europe/Berlin (ask the user; default UTC)")] = "UTC",
+              credentials: Annotated[str, Field(description="add: saved logins \"package/name\", comma-separated")] = "",
+              name: Annotated[str, Field(description="add: a short name")] = "",
+              schedule: Annotated[str, Field(description="toggle / delete: schedule id from op=list")] = "",
               ctx: Optional[Context] = None) -> Dict[str, Any]:
-    """Saved states of a phone, for starting every run from the same point.
-    op=list: id, created, android, current, restorable. op=save: save the current state.
-    op=restore with snapshot_id: reset the phone to that state (what happened since is lost).
-    op=clone with snapshot_id and new_name: a new phone from that state."""
+    """Tasks that run by themselves. op=list: id, name, task, phones, at, days, tz, enabled and the runs it started last
+    time. op=add: run `task` on `devices` at `at` on `days` (each firing starts runs like the run tool). op=toggle: pause
+    or resume. op=delete: remove it."""
     _use(ctx)
-    d = client().device(_resolve(device))
     try:
+        c = client()
         if op == "list":
-            return {"snapshots": d.snapshots()}
-        if op == "save":
-            return {"result": d.save_snapshot().output or "saved"}
-        if op == "restore" and snapshot_id:
-            return {"result": d.restore(snapshot_id).output or "restored"}
-        if op == "clone" and snapshot_id and new_name:
-            return {"result": "created " + d.clone(snapshot_id, new_name).name, "device": new_name}
-        return {"error": "op is list, save, restore (snapshot_id) or clone (snapshot_id, new_name)"}
-    except ClousdError as e:
-        return {"error": _err(e)}
-
-
-@mcp.tool(annotations=ToolAnnotations(title="Recipes", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True))
-def recipe(device: Device_,
-           op: Annotated[str, Field(description="run | record_start | record_status | record_stop")],
-           package: Annotated[str, Field(description="run: app package of a built-in recipe (e.g. com.instagram.android)")] = "",
-           action: Annotated[str, Field(description="run: built-in recipe name (e.g. warm, login, publish_post)")] = "",
-           steps: Annotated[str, Field(description="run: your own recipe as JSON {app, steps:[...]} (e.g. a recorded draft)")] = "",
-           vars: Annotated[str, Field(description='run: variables as JSON, e.g. {"seconds": "300"}')] = "",
-           ctx: Optional[Context] = None) -> Dict[str, Any]:
-    """App recipes on one phone: scripted flows that wait for the right screen at each step, deal with popups and report
-    what they did. op=run runs a built-in recipe (package + action - the list with inputs is fleet op=recipes) or your own
-    JSON and returns when it is finished; for several phones use fleet op=run instead.
-    op=record_start begins recording what is done on the phone (through act, or by a person in the live view);
-    record_status shows progress; record_stop returns the recorded draft recipe, ready for op=run."""
-    _use(ctx)
-    d = client().device(_resolve(device))
-    try:
-        if op == "run":
-            v = json.loads(vars) if vars.strip() else {}
-            if steps.strip():
-                r = d.recipe(recipe=json.loads(steps), vars=v)
-            elif package and action:
-                r = d.recipe(package, action, vars=v)
-            else:
-                return {"error": "run needs package + action, or steps"}
-            return {"ok": bool(r.get("ok", True)), "result": r.get("output", ""), "job": r.get("job", "")}
-        if op == "record_start":
-            return d.record_start()
-        if op == "record_status":
-            return d.record_status()
-        if op == "record_stop":
-            return d.record_stop()
-        return {"error": "op is run, record_start, record_status or record_stop"}
-    except (ClousdError, ValueError) as e:
-        return {"error": _err(e)}
-
-
-def _money_note() -> Optional[Dict[str, Any]]:
-    """Balance warnings to attach to actions that spend money (start, fleet run); None when all is well or unknown."""
-    try:
-        b = client().balance()
-    except Exception:   # older gateway or no account key: actions go on without the note
-        return None
-    if not b.get("warnings"):
-        return None
-    return {"balance": b.get("balance"), "runs_out_in_hours": b.get("runs_out_in_hours"), "warnings": b.get("warnings"),
-            "top_up": b.get("top_up")}
-
-
-@mcp.tool(annotations=ToolAnnotations(title="Account balance", readOnlyHint=True, openWorldHint=False))
-def account(op: Annotated[str, Field(description="balance")] = "balance", ctx: Optional[Context] = None) -> Dict[str, Any]:
-    """The account's money - check it before starting phones, creating them or launching long runs, and tell the user
-    what it says. op=balance: balance, spend_per_day (running per-minute phones + paid proxy traffic of the last 24 hours),
-    runs_out_in_hours, phones running per minute with their price, monthly renewals within 7 days, prices per hour / day
-    cap / month / GB by exit type, the top_up link, and warnings: show every warning to the user in plain words (e.g.
-    "about 6 hours left; at zero the phones stop and go to storage", "proxy traffic cost $3.40 today") with the top_up
-    link. When the balance is low, say so before spending more - do not silently start phones."""
-    _use(ctx)
-    try:
-        if op != "balance":
-            return {"error": "op is balance"}
-        return client().balance()
-    except ClousdError as e:
-        return {"error": _err(e)}
-
-
-def _devs(raw: str) -> list:
-    raw = (raw or "").strip()
-    if raw.startswith("["):
-        return [_resolve(str(x)) for x in json.loads(raw)]
-    return [_resolve(x.strip()) for x in raw.split(",") if x.strip()]
-
-
-@mcp.tool(annotations=ToolAnnotations(title="Network exits and proxies", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True))
-def network(op: Annotated[str, Field(description="options | status | proxies | add | check | bind | unbind | rotate | delete")],
-            device: Annotated[str, Field(description="status: the device to look at")] = "",
-            devices: Annotated[str, Field(description='bind / unbind: device names, JSON list or comma-separated')] = "",
-            proxy_id: Annotated[int, Field(description="check / bind / rotate / delete: proxy id from op=proxies")] = 0,
-            proxy: Annotated[str, Field(description="add: your own proxy - host:port:user:pass, user:pass@host:port or socks5://user:pass@host:port")] = "",
-            type: Annotated[str, Field(description="add: instead of your own proxy, a Clousd exit - residential | mobile | isp | datacenter (see op=options), paid per GB")] = "",
-            country: Annotated[str, Field(description="add: two-letter country of a Clousd exit, e.g. US")] = "",
-            ip_type: Annotated[str, Field(description="add (own proxy): static | residential | mobile")] = "static",
-            rotate_url: Annotated[str, Field(description="add (own residential/mobile proxy): the provider's link that changes the IP")] = "",
-            name: Annotated[str, Field(description="add: a name to find it by")] = "",
-            ctx: Optional[Context] = None) -> Dict[str, Any]:
-    """Where phones go online. Every phone uses one proxy of the account: your own proxy, or a Clousd exit (residential,
-    mobile, ISP, datacenter in a country, paid per GB); time zone, locale and SIM follow it. op=options: exit types on
-    sale and countries. op=status: the exit a device uses now (IP, country, carrier). op=proxies: the account's proxies
-    and which devices use each. op=add: save your proxy (it is checked at once) or a Clousd exit. op=bind: put devices on
-    a proxy. op=unbind: take them off (no internet until bound again). op=rotate: new IP for every running device on the
-    proxy. op=check: test your proxy. op=delete: remove an unused proxy."""
-    _use(ctx)
-    try:
-        c = client()
-        if op == "options":
-            return c.network_options()
-        if op == "status":
-            if not device:
-                return {"error": "status needs device"}
-            return c.device(device).network()
-        if op == "proxies":
-            return {"proxies": c.proxies()}
+            return {"schedules": c.schedules()}
         if op == "add":
-            if not proxy and not type:
-                return {"error": "add needs proxy (your own) or type + country (a Clousd exit)"}
-            return c.add_proxy(proxy=proxy, type=type, country=country, ip_type=ip_type, rotate_url=rotate_url, name=name)
-        if op in ("check", "rotate", "delete"):
-            if not proxy_id:
-                return {"error": f"{op} needs proxy_id (op=proxies)"}
-            return {"check": c.check_proxy, "rotate": c.rotate_proxy, "delete": c.delete_proxy}[op](proxy_id)
-        if op == "bind":
-            if not proxy_id or not devices:
-                return {"error": "bind needs proxy_id and devices"}
-            return c.bind_proxy(proxy_id, _devs(devices))
-        if op == "unbind":
-            if not devices:
-                return {"error": "unbind needs devices"}
-            return c.unbind_proxy(_devs(devices))
-        return {"error": "op is options, status, proxies, add, check, bind, unbind, rotate or delete"}
+            if not task or not devices or not at:
+                return {"error": "add needs task, devices and at (HH:MM)"}
+            creds = []
+            for x in [s.strip() for s in credentials.split(",") if s.strip()]:
+                pk, _, nm = x.partition("/")
+                creds.append({"package": pk, "name": nm})
+            dd = [int(x) for x in days.replace(" ", "").split(",") if x]
+            return {"schedule": c.add_schedule(task, _devs(devices), at, dd, tz or "UTC", name=name, credentials=creds or None)}
+        if op in ("toggle", "delete"):
+            if not schedule:
+                return {"error": f"{op} needs schedule (its id from op=list)"}
+            return c.toggle_schedule(schedule) if op == "toggle" else c.delete_schedule(schedule)
+        return {"error": "op is list, add, toggle or delete"}
     except (ClousdError, ValueError) as e:
         return {"error": _err(e)}
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Accounts, texts and media", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
-def resources(op: Annotated[str, Field(description="accounts | add_accounts | link_account | add_via_instagram | texts | add_texts | media | upload_media | send_media")],
-              platform: Annotated[str, Field(description="accounts: filter by app package, e.g. com.instagram.android; add_via_instagram: com.facebook.katana or com.instagram.barcelona")] = "",
-              accounts: Annotated[str, Field(description='add_accounts: JSON list of {platform, login, password, email?, email_password?, totp?, note?, device?}')] = "",
-              account_id: Annotated[int, Field(description="link_account: account id from op=accounts; add_via_instagram: the Instagram account id")] = 0,
-              device: Annotated[str, Field(description="link_account: the phone to link it to (empty = unlink)")] = "",
-              type: Annotated[str, Field(description="texts / add_texts: caption | comment | bio | name | username")] = "",
-              texts: Annotated[str, Field(description="add_texts: JSON list of strings")] = "",
-              kind: Annotated[str, Field(description="media: image | video (empty = both)")] = "",
-              path: Annotated[str, Field(description="upload_media: a file path on the machine running this server (local MCP only)")] = "",
-              data_b64: Annotated[str, Field(description="upload_media: the file as base64 when there is no path (up to 25 MB)")] = "",
-              name: Annotated[str, Field(description="upload_media: file name with extension, e.g. beach.jpg")] = "",
-              media_ids: Annotated[str, Field(description="send_media: library ids, JSON list or comma-separated")] = "",
-              devices: Annotated[str, Field(description="send_media: device names, JSON list or comma-separated")] = "",
-              ctx: Optional[Context] = None) -> Dict[str, Any]:
-    """The account's resources, the same as Resources in the dashboard. accounts: saved app accounts (login, status, the
-    phone it is linked to; parent_id = it signs in through that Instagram) - passwords and 2FA secrets are never shown;
-    add_via_instagram (account_id = an Instagram account, platform = com.facebook.katana or com.instagram.barcelona): a
-    Facebook / Threads that signs in through that Instagram, on the same phone, no password. To sign a phone in, run fleet with the step
-    {"op":"login","package":...,"account":<id> or "linked"} and the server fills the password itself. add_accounts /
-    link_account: save accounts and link one to a phone. texts / add_texts: captions, comments, bios, names. media /
-    upload_media: the photo and video library; publish one with fleet step {"op":"publish","package":...,"text":"post",
-    "media_id":<id>,"caption":...}. send_media: copy files into phones' galleries as if taken by that phone."""
-    _use(ctx)
-    try:
-        c = client()
-        if op == "accounts":
-            return {"accounts": c.accounts(platform)}
-        if op == "add_accounts":
-            lst = json.loads(accounts) if accounts.strip() else []
-            if not isinstance(lst, list) or not lst:
-                return {"error": "add_accounts needs accounts: a JSON list"}
-            return {"ids": c.add_accounts(lst)}
-        if op == "link_account":
-            if not account_id:
-                return {"error": "link_account needs account_id"}
-            return c.link_account(account_id, device or None)
-        if op == "add_via_instagram":
-            if not account_id or not platform:
-                return {"error": "add_via_instagram needs account_id (the Instagram) and platform"}
-            return {"account": c.add_via_instagram(account_id, platform)}
-        if op == "texts":
-            return {"texts": c.texts(type)}
-        if op == "add_texts":
-            lst = json.loads(texts) if texts.strip() else []
-            if not type or not isinstance(lst, list):
-                return {"error": "add_texts needs type and texts (a JSON list)"}
-            return {"added": c.add_texts(type, lst)}
-        if op == "media":
-            return {"media": c.media(kind)}
-        if op == "upload_media":
-            if path:
-                if _key.get():   # remote server: no files of other machines
-                    return {"error": "path works with the local server only; send data_b64 and name"}
-                return {"media": c.upload_media(path, name)}
-            if data_b64 and name:
-                return {"media": c.upload_media(base64.b64decode(data_b64), name)}
-            return {"error": "upload_media needs path (local server) or data_b64 + name"}
-        if op == "send_media":
-            ids = [int(x) for x in _devs(media_ids)]
-            if not ids or not devices:
-                return {"error": "send_media needs media_ids and devices"}
-            return c.send_media(ids, _devs(devices))
-        return {"error": "op is accounts, add_accounts, link_account, texts, add_texts, media, upload_media or send_media"}
-    except (ClousdError, ValueError) as e:
-        return {"error": _err(e)}
+# ---- serving ----------------------------------------------------------------------------------------------------
 
+class _BearerGate:
+    """Remote server: a request without `Authorization: Bearer …` gets 401 with the OAuth resource metadata (RFC 9728),
+    so connectors (Claude.ai, ChatGPT…) start the sign-in; a key in the address gets a plain refusal."""
 
-def _fleet_summary(job: Dict[str, Any]) -> Dict[str, Any]:
-    """Job of a fleet run → state plus one short line per device (last step, ok or the error)."""
-    try:
-        per = json.loads(job.get("output") or "{}").get("per_phone", {}) or {}
-    except ValueError:
-        per = {}
-    devices: Dict[str, Any] = {}
-    for name, r in per.items():
-        steps = r.get("steps") or []
-        last = steps[-1] if steps else {}
-        devices[name] = {"state": r.get("state", ""), "steps_done": len(steps),
-                         "last": (last.get("op", "") + ": " + str(last.get("output", ""))[-200:]) if last else ""}
-    counts: Dict[str, int] = {}
-    for d in devices.values():
-        counts[d["state"]] = counts.get(d["state"], 0) + 1
-    return {"job": job.get("id", ""), "state": job.get("state", ""), "counts": counts, "devices": devices}
+    def __init__(self, app: Any):
+        self.app = app
 
-
-@mcp.tool(annotations=ToolAnnotations(title="Many phones at once", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True))
-def fleet(op: Annotated[str, Field(description="recipes | run | status")],
-          app: Annotated[str, Field(description="recipes: filter by app name or package, e.g. instagram")] = "",
-          devices: Annotated[str, Field(description='run: device names as JSON list or comma-separated, e.g. ["dev_1","dev_2"]; "all" = every running device of this key')] = "",
-          package: Annotated[str, Field(description="run: app package of the recipe, e.g. com.instagram.android")] = "",
-          action: Annotated[str, Field(description="run: recipe action from op=recipes, e.g. warm, login, publish_post")] = "",
-          vars: Annotated[str, Field(description='run: variables for every device as JSON, e.g. {"seconds": "900", "comment_chance": "0.1"}')] = "",
-          vars_by_device: Annotated[str, Field(description='run: per-device variables as JSON, e.g. {"dev_1": {"login": "anna", "password": "..."}} (logins differ per phone)')] = "",
-          steps: Annotated[str, Field(description='run: instead of a recipe, your own steps as JSON list, e.g. [{"op":"open_app","package":"com.android.chrome"},{"op":"wait","seconds":5}]')] = "",
-          stagger: Annotated[str, Field(description="run: spread the starts, min,max seconds, e.g. 20,90 (phones do not act in lockstep)")] = "",
-          job: Annotated[str, Field(description="status: job id returned by op=run")] = "",
-          ctx: Optional[Context] = None) -> Dict[str, Any]:
-    """Work with many phones in one call - the way to automate, instead of tapping each phone step by step.
-    op=recipes lists the built-in app recipes (sign in, warm up an account, publish, delete the last post...) with their
-    inputs; prefer a recipe over act whenever one fits the task. op=run starts a recipe (package + action) or your own
-    steps on up to 32 phones at once (they may live on different servers) and returns a job id right away - the phones
-    work in parallel, minutes to an hour for a warm-up. op=status with job shows per-phone progress: call it every
-    30-60 s until state is done or failed. Steps for op=run: recipe (package, action, vars), open_app / close_app
-    (package), url (url), tap_text / wait_text (text, seconds), wait (seconds, seconds_max), scroll (text=down|up),
-    browse (seconds 10-600: scroll like a person), install_app (package from the catalog), key (key), screenshot,
-    rotate (new IP), if_text / unless_text (text, skip), login (package, account: an id from resources op=accounts or
-    "linked" for the account linked to each phone - the server fills the password), publish (package, text: post|story|reel,
-    media_id from resources op=media, caption). vars_by_device gives each phone its own account or media_id too, e.g.
-    {"dev_1": {"account": "12"}, "dev_2": {"account": "13"}}."""
-    _use(ctx)
-    try:
-        c = client()
-        if op == "recipes":
-            return {"recipes": c.recipes(app)}
-        if op == "status":
-            if not job:
-                return {"error": "status needs job (from op=run)"}
-            return _fleet_summary(c.job(job).data)
-        if op == "run":
-            raw = devices.strip()
-            if raw == "all":
-                names = [d.name for d in c.devices() if d.data.get("state") == "running"]
-            else:
-                names = _devs(raw)
-            if not names:
-                return {"error": "run needs devices (names, or \"all\")"}
-            if len(names) > 32:
-                return {"error": f"{len(names)} devices: at most 32 per run - split into several runs"}
-            if steps.strip():
-                st = json.loads(steps)
-                if not isinstance(st, list):
-                    return {"error": "steps must be a JSON list"}
-            elif package and action:
-                v = json.loads(vars) if vars.strip() else {}
-                st = [{"op": "recipe", "package": package, "action": action, "vars": {k: str(x) for k, x in v.items()}}]
-            else:
-                return {"error": "run needs package + action (see op=recipes), or steps"}
-            sg = [int(x) for x in stagger.replace(" ", "").split(",") if x] if stagger.strip() else None
-            vb = {_resolve(k): v for k, v in json.loads(vars_by_device).items()} if vars_by_device.strip() else None
-            j = c.run(names, st, stagger=sg, vars_by_device=vb, wait=False)
-            out = {"job": j.id, "state": j.state or "running", "devices": names,
-                   "next": "call fleet op=status with this job every 30-60 s"}
-            note = _money_note()
-            if note:
-                out["money"] = note   # tell the user: balance, hours left, top-up link
-            return out
-        return {"error": "op is recipes, run or status"}
-    except (ClousdError, ValueError) as e:
-        return {"error": _err(e)}
+    async def __call__(self, scope: Dict[str, Any], receive: Any, send: Any) -> None:
+        if scope.get("type") == "http" and scope.get("method") != "OPTIONS":
+            hdrs = {k.lower(): v for k, v in scope.get("headers") or []}
+            if not hdrs.get(b"authorization", b"").lower().startswith(b"bearer "):
+                qs = (scope.get("query_string") or b"").lower()
+                in_url = any(p in qs for p in (b"api_key", b"apikey", b"clousdapikey", b"config=", b"key="))
+                msg = ("keys in the address are not accepted - send Authorization: Bearer cl_live_…" if in_url
+                       else "sign in: send Authorization: Bearer <your Clousd key>, or connect with OAuth")
+                body = json.dumps({"error": "unauthorized", "message": msg}).encode()
+                await send({"type": "http.response.start", "status": 401, "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"www-authenticate", ('Bearer resource_metadata="' + RESOURCE_META + '"').encode()),
+                    (b"content-length", str(len(body)).encode())]})
+                await send({"type": "http.response.body", "body": body})
+                return
+        await self.app(scope, receive, send)
 
 
 def main() -> None:
     """stdio by default. CLOUSD_MCP_HTTP=host:port runs the remote (streamable HTTP) server at /mcp: every request
-    carries the customer's key (see _use), sessions are stateless, so any number of clients share one process."""
+    carries the customer's key, sessions are stateless, so any number of clients share one process."""
     http = os.environ.get("CLOUSD_MCP_HTTP", "").strip()
     if not http:
         mcp.run()
         return
     host, _, port = http.rpartition(":")
-    kw = dict(host=host or "127.0.0.1", port=int(port or 8790), stateless_http=True, json_response=True)
+    host, port_n = host or "127.0.0.1", int(port or 8790)
+    kw: Dict[str, Any] = dict(stateless_http=True, json_response=True)
     # DNS-rebinding protection of the SDK allows only localhost Host headers; behind a reverse proxy the public name
     # arrives as Host, so list it in CLOUSD_MCP_HOSTS (comma-separated), e.g. CLOUSD_MCP_HOSTS=api.clousd.com
     try:
         from mcp.server.transport_security import TransportSecuritySettings
         hosts = [h.strip() for h in os.environ.get("CLOUSD_MCP_HOSTS", "").split(",") if h.strip()]
-        hosts += [f"{kw['host']}:{kw['port']}", f"localhost:{kw['port']}", f"127.0.0.1:{kw['port']}"]
+        hosts += [f"{host}:{port_n}", f"localhost:{port_n}", f"127.0.0.1:{port_n}"]
         kw["transport_security"] = TransportSecuritySettings(allowed_hosts=hosts, allowed_origins=["https://" + h for h in hosts] + ["http://" + h for h in hosts])
     except ImportError:
         pass
     try:
-        mcp.run(transport="streamable-http", **kw)
-    except TypeError:   # mcp 1.x: host/port live in settings
+        app = mcp.streamable_http_app(host=host, **kw)   # mcp 2.x
+    except TypeError:   # mcp 1.x: options live in settings
         for k_, v in kw.items():
             setattr(mcp.settings, k_, v)
-        mcp.run(transport="streamable-http")
+        app = mcp.streamable_http_app()
+    import uvicorn
+    uvicorn.run(_BearerGate(app), host=host, port=port_n, log_level="warning")
 
 
 if __name__ == "__main__":

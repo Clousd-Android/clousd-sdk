@@ -1,64 +1,63 @@
 ---
 name: clousd
-description: Drive real Android cloud phones on Clousd - list and start phones, run app recipes (sign in, warm up, publish) on many phones at once, bind proxies, use saved accounts and media. Use when the user mentions Clousd, cloud phones, phone farms, warming up or posting from many Instagram / TikTok / Facebook / Threads accounts, or automating Android apps on remote phones.
+description: Drive real Android cloud phones on Clousd - check the account, list and start phones, give one or many phones a task in plain words and follow it to the answer, use saved logins without seeing passwords, schedule repeating tasks, or drive the screen step by step. Use when the user mentions Clousd, cloud phones, testing or automating Android apps on remote phones, or an agent that needs a phone.
 ---
 
 # Clousd: real Android phones for agents
 
-Clousd phones are real Android devices in the cloud (Google Play inside, own network exit, SIM and time zone per phone).
-You reach them through the Clousd MCP server (tools `account`, `devices`, `fleet`, `network`, `resources`, `observe`,
-`act`, `inspect`, `snapshots`, `recipe`) or the REST API `https://api.clousd.com/v1` with `Authorization: Bearer cl_live_...`.
+Clousd phones are real Android devices in the cloud (Google Play inside, their own network exit and time zone). You reach
+them through the Clousd MCP server (tools `account`, `devices`, `run`, `run_status`, `answer`, `observe`, `act`,
+`credentials`, `schedules`) or the REST API `https://api.clousd.com/v1` with `Authorization: Bearer cl_live_...`.
 
 ## Setup (once)
 
-If the Clousd tools are not available, ask the user for an API key (dashboard: API & MCP → Create a key for your agent)
-and connect the remote server:
+If the Clousd tools are not available, connect the remote server `https://api.clousd.com/mcp`:
 
+- Claude.ai, ChatGPT and other apps with connectors: add the URL; the app asks the user to sign in to Clousd (OAuth).
 - Claude Code: `claude mcp add --transport http clousd https://api.clousd.com/mcp --header "Authorization: Bearer <key>"`
-- Codex: `codex mcp add clousd --url "https://api.clousd.com/mcp?api_key=<key>"`
-- Gemini CLI: `gemini mcp add --transport http --header "Authorization: Bearer <key>" clousd https://api.clousd.com/mcp`
-- Anything else: an MCP server of type http at `https://api.clousd.com/mcp` with that Authorization header.
+- Codex (`~/.codex/config.toml`): `[mcp_servers.clousd]` with `url = "https://api.clousd.com/mcp"` and
+  `http_headers = { "Authorization" = "Bearer <key>" }`
+- Anything else: an MCP server of type http at that URL with the Authorization header.
 
-Never print the key back in full, never store it in a project file.
+The key comes from the dashboard (Settings → Connections → API keys). Keys go only in the Authorization header, never
+in the URL. Never print the key back in full, never store it in a project file.
 
 ## How to work
 
-0. **Money first.** `account op=balance` before starting phones, creating them or launching long runs. Tell the user
-   the balance, how many hours it lasts at the current spend and every `warnings` line (proxy traffic cost, monthly
-   renewals, "at zero the phones stop and go to storage") with the `top_up` link. Actions that spend money return a
-   `money` note when the balance is low - always pass it on, and ask before spending more when hours left are few.
-   Own proxies cost nothing; Clousd residential / mobile exits are billed per GB.
-1. **Look first.** `devices op=list`: every phone has a `label` (the name the user sees, e.g. "Anna IG" or "Pixel 7 #3"),
-   a `number`, its `accounts` and `proxy_id`. Refer to phones by label or number - every tool accepts them.
-2. **Recipes before taps.** For app tasks call `fleet op=recipes` and run the matching recipe (`login`, `warm`,
-   `publish_post`, `publish_story`, `delete_last_post`, `login_via`). Recipes wait for the right screens and handle
-   popups. Tap through `observe` / `act` only when no recipe fits, or to check what is on a screen.
-3. **Many phones = one call.** `fleet op=run devices=all ...` (or a list) runs the recipe on up to 32 phones in
-   parallel and returns a job. Then `fleet op=status job=...` every 30-60 seconds until `state` is done or failed.
-   Never loop `act` over phones. Use `stagger=20,90` so phones do not act in lockstep.
-4. **Accounts without passwords.** `resources op=accounts` lists saved accounts (no secrets). Sign in with the step
-   `{"op":"login","package":"com.instagram.android","account":"linked"}` (the account linked to each phone) or an
-   account id. Never ask the user to type passwords into the chat. Facebook and Threads can sign in through the phone's
-   Instagram: `resources op=add_via_instagram`, then the same login step.
-5. **Network.** Each phone uses one proxy of the account. `network op=proxies` shows them; `network op=add` saves the
-   user's own proxy (checked at once); `network op=bind` puts phones on it; `network op=rotate` gives a new IP.
-   Time zone, locale and SIM follow the exit automatically.
-6. **Media.** `resources op=media` lists the library; publish with
-   `{"op":"publish","package":...,"text":"post","media_id":<id>,"caption":"..."}`.
-7. **Clean state.** `snapshots op=save` before risky work, `op=restore` to go back.
+1. **Account first.** `account` before starting phones or long work: tell the user every line of `warnings` in plain
+   words, with the `top_up` link.
+2. **Look at the phones.** `devices` (op=list): every phone has a `label` (the name the user sees, e.g. "Pixel 7 #3")
+   and a `number`; every tool accepts the name, the label or the number. A stopped phone starts with `devices op=start`
+   (one to three minutes).
+3. **Give the phone the goal, not the taps.** `run task="..." devices=...` - Clousd's agent works the screen and
+   finishes with an answer. Write the task like you would for a person: what to open, what to do, what to report back.
+   Pass `output_schema` when you need the answer as JSON.
+4. **Follow it.** If `run` returns before the end, call `run_status run=<id> wait_seconds=40` until `status` is
+   `completed`, `failed` or `cancelled`. Show the user the `answer` and the `replay` link (every step with its screen).
+5. **Questions.** A run with `waiting_for` stopped to ask: reply with `answer` (text, or allow / decline for a
+   permission). If only the user can know, ask the user first.
+6. **Many phones = one run.** `devices` takes a list: the same task runs on each phone in parallel (up to 32), the
+   result has a line per phone. Never loop over phones yourself.
+7. **Logins without passwords.** `credentials` lists saved logins (names only, never values). Pass them to `run` as
+   `credentials="package/name"`: the values are typed on the phone without you or the model seeing them. If a login is
+   missing, ask the user to add it in the dashboard - never ask for a password in the chat.
+8. **Repeat on a schedule.** `schedules op=add task=... devices=... at=09:00 days=1,2,3,4,5 tz=<user's time zone>`.
+9. **Drive the screen yourself only when needed.** `observe` (screenshot with numbered elements) and `act` (tap an
+   element number, type, swipe, open an app or a link) - for checking a screen, or for a step the user wants exactly.
+   `act` also reads without touching: notifications, clipboard, app_info, crashes, health.
 
 ## Typical requests
 
-- "Warm up all my Instagram accounts for 15 minutes" →
-  `fleet op=run devices=all package=com.instagram.android action=warm vars={"seconds":"900","comment_chance":"0.1"} stagger=20,90`
-- "Sign every phone into its Instagram" →
-  `fleet op=run devices=all steps=[{"op":"login","package":"com.instagram.android","account":"linked"}]`
-- "Put phones 1-5 on my new proxy host:port:user:pass" → `network op=add proxy=...`, then `network op=bind proxy_id=<id> devices=["#1","#2","#3","#4","#5"]`
-- "Name the phones after their accounts" → for each phone `devices op=rename device=<label> label=<account login>`
+- "What Android version is on my Pixel?" → `run task="Open Settings and tell me the Android version" devices="Pixel 7 #3"`
+- "Check that our app opens and the login screen shows on all test phones" →
+  `run task="Open the app com.example.shop and tell me what the first screen shows" devices="1,2,3,4"`
+- "Sign in with the work account and open the profile" →
+  `credentials` (find `com.example.app/work`), then `run task="Sign in and open the profile" devices=... credentials="com.example.app/work"`
+- "Every weekday at 9 check the order page" → `schedules op=add task="..." devices=... at=09:00 days=1,2,3,4,5 tz=Europe/Berlin`
 
 ## Limits
 
-- Up to 32 phones per `fleet op=run`; split bigger fleets.
+- Up to 32 phones per run; split bigger sets.
 - 60 API requests a minute per key (120 per device route); the tools retry on 429.
-- Recipes exist for Instagram, TikTok, Facebook and Threads; other apps run on generic steps.
-- Stopped phones cost nothing; starting one takes one to three minutes.
+- A phone does one task at a time; a second run on it waits in the queue.
+- Stopped phones keep their apps and data; starting one takes one to three minutes.

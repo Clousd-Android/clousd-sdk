@@ -1,124 +1,126 @@
 # clousd
 
-Python client for [CLOUSD](https://clousd.com/agents/): cloud Android phones modelled on real devices, for scripts
-and AI agents. Look at the screen, act on it, reset the phone to a saved state between runs, clone as many copies as
-the job needs.
-
-Early access: ask for a key at [clousd.com/agents](https://clousd.com/agents/#access).
+Python client for [CLOUSD](https://clousd.com/agents/): real Android phones in the cloud, built as specific real models,
+for scripts and AI agents. Give a phone a task in plain words and get the answer, or drive the screen yourself.
 
 ```bash
 pip install clousd
-export CLOUSD_API_KEY=cl_live_...
+export CLOUSD_API_KEY=cl_live_...        # dashboard: Settings → Connections → API keys
 ```
-
-## One run
-
-```python
-from clousd import Clousd
-
-c = Clousd()                                   # key from CLOUSD_API_KEY
-phone = c.device("dev_04f2")
-
-snap = next(s for s in phone.snapshots() if s["restorable"])
-phone.restore(snap["id"])                      # reset: every run starts from the same state
-
-png = phone.screenshot(width=540)              # look (JPEG when width is given, PNG otherwise)
-print(phone.screen_text())                     # every text on the screen
-
-phone.open_app("com.android.chrome")           # act
-phone.tap_text("Search")
-phone.type("weather in Berlin")
-phone.key("enter")
-
-phone.wait_text("Berlin", timeout=30)          # check
-```
-
-## What a device can do
-
-| Look | Act | State |
-|---|---|---|
-| `screenshot(width=None)` | `tap(x, y)`, `swipe(x, y, x2, y2, ms)`, `scroll("down")` | `snapshots()` |
-| `screen_text()` | `type(text)`, `key("back")` | `save_snapshot()` |
-| `find_text(text)` | `open_app(pkg)`, `close_app(pkg)`, `open_url(url)` | `restore(id)` |
-| `size()` | `tap_text(text)`, `wait_text(text, timeout)` | `clone(id, name)` |
-| `installed()`, `logs()` | `start()`, `stop()`, `restart()` | `c.job(id).wait()` |
-| `observe(width, ui)`, `screenrecord(seconds)` | `act(op, settle, seq, ...)`, `long_press(x, y, ms)` | `recipe(...)` |
-| `notifications()`, `clipboard_get()` | `intent(action, data, ...)`, `settings("wifi")` | `record_start()` / `record_stop()` |
-| `app_info(pkg)`, `crashes(pkg)`, `health()` | `clipboard_set(text)`, `notifications_open()` / `_clear()` | |
-| `c.proxies()`, `c.accounts()`, `c.texts()`, `c.media()` | `c.add_proxy(...)`, `c.bind_proxy(id, phones)`, `c.rotate_proxy(id)`, `c.add_accounts([...])`, `c.link_account(id, phone)`, `c.upload_media(path)`, `c.send_media(ids, phones)` | `device.network()`, `device.set_network(...)`, `device.rotate_ip()` |
-| `c.balance()` | | |
-| `c.find("Anna IG")`, `device.label` | `device.rename("Anna IG")`, `c.add_via_instagram(ig_id, "com.instagram.barcelona")` | |
-| `c.recipes(app)` | `c.run(devices, steps)`, `c.run_recipe(devices, pkg, action, vars)` | `job.results`, `job.failed` |
-
-Coordinates are device pixels (`size()` gives the screen). Long operations return a `Job`; they wait by default,
-pass `wait=False` to poll yourself. Errors raise `ClousdError` with the HTTP status, a short code and a message.
-The API allows 60 requests a minute per key; the client waits and retries on 429.
-
-For checks from inside the phone (app databases, files, `dumpsys`) open an ADB session to the device from the
-dashboard or `POST /v1/devices/{name}/adb`.
-
-## Many phones at once
-
-A recipe runs an app flow (sign in, warm up, publish, delete the last post) without a model; `run_recipe` and `run`
-start it on up to 32 phones in parallel, wherever they live, and return one `Job` with a result per phone.
-
-```python
-from clousd import Clousd
-
-c = Clousd()
-phones = [d for d in c.devices() if d.state == "running"]       # 10 phones, any servers
-
-for r in c.recipes("instagram"):                               # what can run without a model
-    print(r["action"], "-", r["about"], [i["name"] for i in r["inputs"]])
-
-# sign every phone into its own account: one call, the phones work in parallel
-accounts = {"dev_01": {"login": "anna.k", "password": "..."}, "dev_02": {"login": "mark_t", "password": "..."}}
-job = c.run_recipe(list(accounts), "com.instagram.android", "login", vars_by_device=accounts)
-print(job.failed)                                             # [] - or the devices to look at
-
-# warm all ten up for 15 minutes, starts spread over 20-90 s so they do not move in lockstep
-job = c.run_recipe(phones, "com.instagram.android", "warm",
-                   {"seconds": 900, "comment_chance": 0.1, "comments": "Love this|So good|Wow"}, stagger=[20, 90])
-for name, r in job.results.items():
-    print(name, r["state"], r["steps"][-1]["output"])
-```
-
-`c.run(phones, steps)` takes your own chain of steps instead of a recipe (`open_app`, `url`, `tap_text`, `wait_text`,
-`wait`, `browse`, `scroll`, `install_app`, `rotate`, `recipe`, ...). With `wait=False` it returns at once; poll
-`c.job(job.id).refresh()` yourself.
 
 ## Give a phone a task
 
-`clousd.agent` runs the loop "look at the screen, decide, act, check" with any OpenAI-compatible chat model (a local
-llama.cpp or vLLM server, Ollama, a hosted API): each step the model gets the screenshot with a number on every element
-and the elements as text, and calls one tool (tap element 12, type, scroll, open_app, done).
+```python
+from clousd import Clousd
+
+c = Clousd()                                             # key from CLOUSD_API_KEY
+
+run = c.run("Open Settings and tell me the Android version", device="dev_04f2", wait=True)
+print(run.status, run.answer)                            # completed  Android 15
+
+# the same task on several phones at once (up to 32): one run per phone under one parent
+run = c.run("Open the Example Shop app and tell me what the first screen shows", devices=["dev_01", "dev_02"], wait=True)
+for r in run.children:
+    print(r.device, r.status, r.answer)
+
+# a saved login is typed on the phone without you or the model seeing it (add logins in the dashboard or below)
+login = c.credentials("com.example.shop")[0]
+run = c.run("Sign in and tell me how many orders are on the Orders page", device="dev_01", credentials=[login],
+            output_schema={"type": "object", "properties": {"orders": {"type": "integer"}}}, wait=True)
+print(run.structured_output)                             # {"orders": 3}
+```
+
+Follow a run live and answer it when it asks:
+
+```python
+run = c.run("Book the earliest table for two tonight", device="dev_01", mode="ask")
+for ev in run.events():                                  # status | step | plan | card | answer | message | end
+    if ev["event"] == "step":
+        print(ev["data"]["n"], ev["data"]["tool"], ev["data"]["result"])
+    if ev["event"] == "card":                            # a question, or permission for a risky step
+        run.reply(allow=True)                            # or run.reply("7 pm")
+print(run.refresh().answer)
+for s in run.trajectory():                               # every step: what it did and what happened
+    print(s["n"], s["tool"], s["result"])
+```
+
+Repeat a task on a schedule, and get a webhook when it ends:
+
+```python
+c.add_schedule("Open the Orders page and report new orders", devices=["dev_01"], at="09:00", days=[1, 2, 3, 4, 5],
+               tz="Europe/Berlin")
+hook = c.add_webhook("https://example.com/clousd", events=["run.completed", "run.failed"])
+print(hook["secret"])                                    # shown once: verify X-Clousd-Signature with it
+```
+
+| Tasks | Logins | Schedules and webhooks |
+|---|---|---|
+| `c.run(task, device=… / devices=[…], credentials, output_schema, mode, max_steps, timeout, wait)` | `c.credentials(package)` | `c.schedules()`, `c.add_schedule(...)` |
+| `run.wait()`, `run.events()`, `run.trajectory()`, `run.step_image(n)` | `c.add_credential(package, name, fields)` | `c.toggle_schedule(id)`, `c.delete_schedule(id)` |
+| `run.reply(answer / allow=)`, `run.message(text)`, `run.cancel()` | `c.set_credential_field(id, type, value)` | `c.webhooks()`, `c.add_webhook(url, events)` |
+| `c.runs(status=, device=)`, `c.get_run(id)`, `device.run(task)` | `c.delete_credential(id)` | `c.test_webhook(id)`, `c.webhook_deliveries(id)` |
+
+## Drive the screen yourself
+
+```python
+phone = c.device("dev_04f2")
+
+snap = next(s for s in phone.snapshots() if s["restorable"])
+phone.restore(snap["id"])                      # every run starts from the same state
+
+phone.open_app("com.android.chrome")
+phone.tap_text("Search")
+phone.type("weather in Berlin")
+phone.key("enter")
+phone.wait_text("Berlin", timeout=30)
+
+obs = phone.observe(width=540)                 # screenshot + UI tree + seq
+phone.act("tap", seq=obs["seq"], x=540, y=1200, settle=True)
+```
+
+| Look | Act | State |
+|---|---|---|
+| `screenshot(width=None)`, `observe(width, ui)` | `tap(x, y)`, `swipe(...)`, `scroll("down")`, `long_press(...)` | `snapshots()`, `save_snapshot()` |
+| `screen_text()`, `find_text(text)`, `size()` | `type(text)`, `key("back")`, `tap_text(text)`, `wait_text(text)` | `restore(id)`, `clone(id, name)` |
+| `installed()`, `notifications()`, `clipboard_get()` | `open_app(pkg)`, `close_app(pkg)`, `open_url(url)`, `intent(...)`, `settings("wifi")` | `start()`, `stop()`, `restart()` |
+| `app_info(pkg)`, `crashes(pkg)`, `health()`, `screenrecord(seconds)` | `act(op, settle, seq, ...)`, `clipboard_set(text)` | `c.job(id).wait()` |
+| `c.devices()`, `c.find("Pixel 7 #3")`, `c.balance()` | `device.rename(...)`, `c.create_device(...)` | `device.network()`, `c.proxies()`, `c.bind_proxy(id, phones)` |
+
+Coordinates are device pixels (`size()` gives the screen). Long device operations return a `Job`; they wait by default,
+pass `wait=False` to poll yourself. Errors raise `ClousdError` with the HTTP status, a short code and a message. The API
+allows 60 requests a minute per key; the client waits and retries on 429.
+
+## Your own model, step by step
+
+`clousd.agent` runs the loop "look at the screen, decide, act, check" on your machine with any OpenAI-compatible chat
+model (llama.cpp, vLLM, Ollama, a hosted API): each step the model gets the screenshot with a number on every element
+and calls one tool.
 
 ```python
 from clousd import Clousd
 from clousd.agent import Agent, Model
 
 phone = Clousd().device("dev_04f2")
-agent = Agent(phone, Model("http://127.0.0.1:8080/v1"), trace_path="run.jsonl")
-res = agent.run("Open Settings and tell me which Android version this phone runs")
-print(res.status, res.answer)          # done Android 14
+res = Agent(phone, Model("http://127.0.0.1:8080/v1"), trace_path="run.jsonl").run("Open Settings and tell me the Android version")
+print(res.status, res.answer)
 ```
 
-Or from the command line (`pip install "clousd[image]"` adds Pillow for the numbered screenshots):
+## Command line
 
 ```bash
-clousd run "Set an alarm for 7:30 AM" --device dev_04f2 --model-url http://127.0.0.1:8080/v1
-clousd run "Turn on Dark theme" --device dev_04f2 --model-url ... --save-recipe dark.json   # the run becomes a recipe
+clousd devices
+clousd run "Open Settings and tell me the Android version" --device dev_04f2        # Clousd's agent, steps live
+clousd run "Open the app and report the first screen" --device dev_01 --device dev_02
+clousd runs --status failed
+clousd agent "Turn on Dark theme" --device dev_04f2 --model-url http://127.0.0.1:8080/v1   # your own model
 clousd bench --device dev_04f2 --model-url http://127.0.0.1:8080/v1      # 12 everyday tasks with automatic checks
-clousd explore com.android.settings --device dev_04f2                   # map of the app's screens + draft app pack
-clousd record start --device dev_04f2   # ... do the flow on the phone ...   clousd record stop --device dev_04f2 --out flow.json
-clousd recipe flow.json --device dev_04f2
+clousd explore com.android.settings --device dev_04f2                   # map of the app's screens
 ```
 
-Every step of a run is kept: what the model saw, what it called, what happened and how long each part took. A screen
-that changed between the look and the action is never acted on (the API answers 409 and the loop looks again).
+## Upgrading from 0.3
 
-## Plug a phone into an AI agent
+`c.run(task, ...)` now starts a task (a Run). Removed: `recipes()`, `run_recipe()`, the group form of `run(devices,
+steps)`, `accounts()` / `add_accounts()` / `link_account()` / `add_via_instagram()`, `texts()` / `add_texts()`,
+`device.recipe()` and `record_*()`. Logins are `credentials()`, passed to a run.
 
-[`clousd-mcp`](../mcp) exposes the same operations as MCP tools for any MCP-capable agent.
-
-MIT license.
+[`clousd-mcp`](../mcp) exposes the same as MCP tools for any MCP-capable agent. MIT license.

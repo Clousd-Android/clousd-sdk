@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clousd-mcp"
-version = "0.3.2"
+version = "1.0.0"
 description = "MCP server: give an AI agent a real Android phone in the cloud"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-dependencies = ["mcp>=1.10.0", "clousd>=0.3.2", "pillow>=9"]
+dependencies = ["mcp>=1.10.0", "clousd>=1.0.0", "pillow>=9", "uvicorn>=0.27"]
 keywords = ["mcp", "android", "cloud phone", "ai agents", "mobile automation"]
 
 [project.scripts]
