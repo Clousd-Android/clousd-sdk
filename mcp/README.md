@@ -98,6 +98,8 @@ run_status run=r_8f2c wait_seconds=40           -> completed; Pixel 7 #1: "3 ord
 are no longer MCP tools (the REST API and the Python client still have proxies, snapshots and device reads). Keys in
 the URL (`?api_key=`, `?config=`) are no longer accepted - send the `Authorization` header or connect with OAuth.
 
+mcp-name: io.github.Clousd-Android/clousd-mcp
+
 ## License
 
 MIT

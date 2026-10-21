@@ -7,7 +7,7 @@
     "source": "github"
   },
   "websiteUrl": "https://clousd.com/agents/",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "remotes": [
     {
       "type": "streamable-http",
@@ -26,7 +26,7 @@
     {
       "registryType": "pypi",
       "identifier": "clousd-mcp",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "transport": {
         "type": "stdio"
       },
