@@ -197,14 +197,18 @@ class Clousd:
         enabled, last_run and last_runs (ids of the runs it started last time)."""
         return self.request("GET", "schedules").get("schedules", [])
 
-    def add_schedule(self, task: str, devices: List[Any], at: str, days: Optional[List[int]] = None, tz: str = "UTC",
+    def add_schedule(self, task: str, devices: List[Any], at: str = "", days: Optional[List[int]] = None, tz: str = "UTC",
                      name: str = "", credentials: Optional[List[Any]] = None,
-                     options: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                     options: Optional[Dict[str, Any]] = None, every: str = "day", trigger: str = "",
+                     more: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """Run `task` on `devices` at `at` (HH:MM in time zone `tz`, e.g. "Europe/Berlin") on `days` (1-7, empty = every
-        day). Each firing starts runs like run(); find them with runs() or the schedule's last_runs."""
+        day). every="hour" runs it every hour at the minute of `at`. trigger="api" never runs by time - start it with
+        run_schedule(). `more` adds other times to the same task: [{"at": "18:00", "days": [6, 7]}, {"at": "00:30", "every":
+        "hour"}]. Each firing starts runs like run(); find them with runs() or the schedule's last_runs."""
         body: Dict[str, Any] = {"name": name or task[:60], "phones": _names(devices), "task": task, "at": at,
                                 "days": list(days or []), "tz": tz, "model": {"provider": "clousd"},
-                                "options": dict(options or {})}
+                                "options": dict(options or {}), "every": every, "trigger": trigger,
+                                "more": list(more or [])}
         if credentials:
             body["credentials"] = [{"package": str(x.get("package", "")), "name": str(x.get("name", ""))} for x in credentials]
         return self.request("POST", "schedules", json=body).get("schedule", {})
@@ -215,6 +219,10 @@ class Clousd:
 
     def delete_schedule(self, schedule_id: str) -> Dict[str, Any]:
         return self.request("POST", f"schedules/{schedule_id}/delete", json={})
+
+    def run_schedule(self, schedule_id: str) -> List[str]:
+        """Start a schedule now (the only way for trigger="api"); returns the ids of the runs it started."""
+        return self.request("POST", f"schedules/{schedule_id}/run", json={}).get("runs", [])
 
     # -- network exits: proxies of the account ------------------------------------------------------------------
     def proxies(self) -> List[Dict[str, Any]]:

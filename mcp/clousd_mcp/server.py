@@ -554,38 +554,43 @@ def credentials(package: Annotated[str, Field(description="only logins of this a
 
 
 @mcp.tool(annotations=ToolAnnotations(title="Schedules", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=True))
-def schedules(op: Annotated[str, Field(description="list (default) | add | toggle | delete")] = "list",
+def schedules(op: Annotated[str, Field(description="list (default) | add | run | toggle | delete")] = "list",
               task: Annotated[str, Field(description="add: the task in plain words, like for run")] = "",
               devices: Annotated[str, Field(description="add: devices, comma-separated or a JSON list")] = "",
-              at: Annotated[str, Field(description="add: time HH:MM")] = "",
+              at: Annotated[str, Field(description="add: time HH:MM (every=hour: only the minutes count)")] = "",
+              every: Annotated[str, Field(description="add: day (default) | hour")] = "day",
+              trigger: Annotated[str, Field(description="add: empty = by time | api = only when started with op=run")] = "",
               days: Annotated[str, Field(description="add: days 1-7 (1 = Monday), comma-separated; empty = every day")] = "",
               tz: Annotated[str, Field(description="add: IANA time zone of `at`, e.g. Europe/Berlin (ask the user; default UTC)")] = "UTC",
               credentials: Annotated[str, Field(description="add: saved logins \"package/name\", comma-separated")] = "",
               name: Annotated[str, Field(description="add: a short name")] = "",
-              schedule: Annotated[str, Field(description="toggle / delete: schedule id from op=list")] = "",
+              schedule: Annotated[str, Field(description="run / toggle / delete: schedule id from op=list")] = "",
               ctx: Optional[Context] = None) -> Dict[str, Any]:
     """Tasks that run by themselves. op=list: id, name, task, phones, at, days, tz, enabled and the runs it started last
-    time. op=add: run `task` on `devices` at `at` on `days` (each firing starts runs like the run tool). op=toggle: pause
-    or resume. op=delete: remove it."""
+    time. op=add: run `task` on `devices` at `at` on `days`, or every hour (every=hour), or only on demand (trigger=api);
+    each firing starts runs like the run tool. op=run: start it now. op=toggle: pause or resume. op=delete: remove it."""
     _use(ctx)
     try:
         c = client()
         if op == "list":
             return {"schedules": c.schedules()}
         if op == "add":
-            if not task or not devices or not at:
-                return {"error": "add needs task, devices and at (HH:MM)"}
+            if not task or not devices or (not at and trigger != "api"):
+                return {"error": "add needs task, devices and at (HH:MM), or trigger=api"}
             creds = []
             for x in [s.strip() for s in credentials.split(",") if s.strip()]:
                 pk, _, nm = x.partition("/")
                 creds.append({"package": pk, "name": nm})
             dd = [int(x) for x in days.replace(" ", "").split(",") if x]
-            return {"schedule": c.add_schedule(task, _devs(devices), at, dd, tz or "UTC", name=name, credentials=creds or None)}
-        if op in ("toggle", "delete"):
+            return {"schedule": c.add_schedule(task, _devs(devices), at, dd, tz or "UTC", name=name, credentials=creds or None,
+                                               every=every or "day", trigger=trigger)}
+        if op in ("run", "toggle", "delete"):
             if not schedule:
                 return {"error": f"{op} needs schedule (its id from op=list)"}
+            if op == "run":
+                return {"runs": c.run_schedule(schedule)}
             return c.toggle_schedule(schedule) if op == "toggle" else c.delete_schedule(schedule)
-        return {"error": "op is list, add, toggle or delete"}
+        return {"error": "op is list, add, run, toggle or delete"}
     except (ClousdError, ValueError) as e:
         return {"error": _err(e)}
 

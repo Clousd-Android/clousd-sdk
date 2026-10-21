@@ -103,25 +103,33 @@ paths:
     get:
       summary: Schedules of this key
     post:
-      summary: A task that runs by itself at a time on days of the week
+      summary: A task that runs by itself - daily, hourly or when you call it
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [phones, task, at]
+              required: [phones, task]
               properties:
                 name: { type: string }
                 phones: { type: array, items: { type: string }, maxItems: 32 }
                 task: { type: string }
-                at: { type: string, example: "09:00" }
+                at: { type: string, example: "09:00", description: "HH:MM; with every=hour only the minutes count; not needed for trigger=api" }
+                every: { type: string, enum: [day, hour], default: day }
+                trigger: { type: string, enum: ["", api], description: "api = never by time, only POST /schedules/{id}/run" }
+                more: { type: array, maxItems: 12, description: "More times for the same task", items: { type: object, properties: { at: { type: string }, every: { type: string, enum: [day, hour] }, days: { type: array, items: { type: integer } } } } }
                 days: { type: array, items: { type: integer, minimum: 1, maximum: 7 }, description: "1 = Monday; empty = every day" }
                 tz: { type: string, example: Europe/Berlin }
                 credentials: { type: array, items: { type: object, properties: { package: { type: string }, name: { type: string } } } }
                 options: { type: object }
       responses:
         "201": { description: Created, content: { application/json: { schema: { type: object, properties: { schedule: { type: object } } } } } }
+  /schedules/{id}/run:
+    post:
+      summary: Start a schedule now - the trigger for trigger=api
+      responses:
+        "200": { description: Started, content: { application/json: { schema: { type: object, properties: { runs: { type: array, items: { type: string } } } } } } }
   /schedules/{id}/toggle:
     post:
       summary: Pause or resume a schedule
