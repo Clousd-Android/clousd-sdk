@@ -11,7 +11,7 @@
 
 Every call is a plain HTTPS request to https://api.clousd.com/v1 with `Authorization: Bearer cl_live_…`.
 A task (`run`) is done on the phone by Clousd's own agent; follow it with `run.events()` or `run.wait()`.
-Long device operations (start, snapshots, restore, clone) return a Job; `wait=True` or `job.wait()` polls it.
+Long device operations (start, stop, restart, reset) return a Job; `wait=True` or `job.wait()` polls it.
 """
 from __future__ import annotations
 
@@ -516,6 +516,10 @@ class Device:
     def restart(self, wait: bool = True, timeout: float = 900) -> Job:
         return self.client._job(self.client.request("POST", self._p("restart")), wait, timeout)
 
+    def reset(self, wait: bool = True, timeout: float = 900) -> Job:
+        """Reset to a fresh state: apps and data are wiped, the phone comes back like new (same model and Android)."""
+        return self.client._job(self.client.request("POST", self._p("reset")), wait, timeout)
+
     def logs(self) -> Any:
         """Recent logcat lines."""
         return self.client.request("GET", self._p("logs"))
@@ -751,23 +755,6 @@ class Device:
     def run(self, task: str, **kw: Any) -> Run:
         """A task on this phone in plain words (same options as Clousd.run)."""
         return self.client.run(task, device=self, **kw)
-
-    # -- state between runs ------------------------------------------------------------------------------------
-    def snapshots(self) -> List[Dict[str, Any]]:
-        """Saved states of this device: id, created, android, current, restorable."""
-        return self.client.request("GET", self._p("snapshots")).get("snapshots", [])
-
-    def save_snapshot(self, wait: bool = True, timeout: float = 1800) -> Job:
-        return self.client._job(self.client.request("POST", self._p("snapshots")), wait, timeout)
-
-    def restore(self, snapshot_id: str, wait: bool = True, timeout: float = 1800) -> Job:
-        """Reset the device to a saved state."""
-        return self.client._job(self.client.request("POST", self._p(f"snapshots/{snapshot_id}/restore")), wait, timeout)
-
-    def clone(self, snapshot_id: str, name: str, wait: bool = True, timeout: float = 1800) -> "Device":
-        """A new device (`name`: letters and digits, up to 16) from a saved state of this one."""
-        self.client._job(self.client.request("POST", self._p(f"snapshots/{snapshot_id}/clone"), json={"name": name}), wait, timeout)
-        return Device(self.client, name)
 
     def __repr__(self) -> str:
         return f"<Device {self.name} {self.data.get('state', '')}>".replace(" >", ">")

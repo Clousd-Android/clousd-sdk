@@ -54,8 +54,6 @@ class Fake(BaseHTTPRequestHandler):
             return self._send(200, {"devices": [{"name": "t1", "state": "running"}]})
         if p.startswith("/v1/devices/t1/screenshot"):
             return self._send(200, raw=tiny_png(1080, 2400), ctype="image/png")
-        if p == "/v1/devices/t1/snapshots":
-            return self._send(200, {"snapshots": [{"id": "v3", "restorable": True}]})
         if p.startswith("/v1/devices/t1/observe"):
             import base64
             return self._send(200, {"seq": 7, "screen": {"w": 1080, "h": 2400},
@@ -97,7 +95,7 @@ class Fake(BaseHTTPRequestHandler):
             return self._send(201, {"ok": True, "run": {"id": "r1", "device": "t1", "status": "queued"}})
         if p == "/v1/runs/r2/answer":
             return self._send(200, {"ok": True})
-        if p == "/v1/devices/t1/snapshots/v3/restore":
+        if p == "/v1/devices/t1/reset":
             return self._send(202, {"ok": True, "job": {"id": "j1", "state": "running"}})
         return self._send(400, {"error": "bad_request", "message": "op"})
 
@@ -139,8 +137,8 @@ class ClientTest(unittest.TestCase):
         d.tap_norm(0.5, 0.5)
         self.assertEqual(Fake.calls[-1][2], {"op": "tap", "x": 540, "y": 1200})
 
-    def test_restore_waits_for_job(self):
-        job = self.c.device("t1").restore("v3", timeout=30)
+    def test_reset_waits_for_job(self):
+        job = self.c.device("t1").reset(timeout=30)
         self.assertEqual(job.state, "done")
 
     def test_observe_and_act(self):

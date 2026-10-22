@@ -229,6 +229,9 @@ paths:
   /devices/{name}/restart:
     parameters: [{ $ref: "#/components/parameters/name" }]
     post: { summary: Restart the device, responses: { "202": { $ref: "#/components/responses/Job" } } }
+  /devices/{name}/reset:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post: { summary: "Reset the device to a fresh state: apps and data are wiped, the phone comes back like new (same model and Android, 1-5 min)", responses: { "202": { $ref: "#/components/responses/Job" } } }
   /devices/{name}/screenshot:
     parameters: [{ $ref: "#/components/parameters/name" }]
     get:
@@ -335,44 +338,6 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, path: { type: string }, name: { type: string }, kind: { type: string }, unique: { type: boolean }, geo: { type: boolean }, taken_at: { type: string }, make: { type: string }, model: { type: string }, removed: { type: integer }, pushed: { type: array, items: { type: object } } } } } } }
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
-  /devices/{name}/snapshots:
-    parameters: [{ $ref: "#/components/parameters/name" }]
-    get:
-      summary: Saved states of the device
-      responses:
-        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { snapshots: { type: array, items: { $ref: "#/components/schemas/Snapshot" } } } } } } }
-    post: { summary: Save the current state, responses: { "202": { $ref: "#/components/responses/Job" } } }
-  /devices/{name}/snapshots/{id}/restore:
-    parameters: [{ $ref: "#/components/parameters/name" }, { name: id, in: path, required: true, schema: { type: string } }]
-    post: { summary: Reset the device to a saved state, responses: { "202": { $ref: "#/components/responses/Job" } } }
-  /devices/{name}/snapshots/{id}/clone:
-    parameters: [{ $ref: "#/components/parameters/name" }, { name: id, in: path, required: true, schema: { type: string } }]
-    post:
-      summary: A new device from a saved state
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, pattern: "^[a-z0-9]{1,16}$" } } } } } }
-      responses: { "202": { $ref: "#/components/responses/Job" } }
-  /devices/{name}/worlds:
-    parameters: [{ $ref: "#/components/parameters/name" }]
-    get:
-      summary: Worlds of the device (frozen /data states it was taken from or is running on)
-      responses:
-        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { worlds: { type: array, items: { type: object, properties: { world: { type: string }, from: { type: string }, profile: { type: string }, android: { type: string }, size: { type: integer }, created: { type: string }, image: { type: string }, devices: { type: array, items: { type: string } } } } } } } } } }
-    post:
-      summary: Freeze the device state as a world (the device is stopped while the world is taken and stays stopped)
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, pattern: "^[a-z0-9_-]{1,32}$" } } } } } }
-      responses: { "202": { $ref: "#/components/responses/Job" }, "400": { $ref: "#/components/responses/Error" } }
-  /devices/{name}/worlds/{world}:
-    parameters: [{ $ref: "#/components/parameters/name" }, { name: world, in: path, required: true, schema: { type: string } }]
-    delete: { summary: Delete a world (409 while a device uses it), responses: { "200": { description: OK }, "409": { $ref: "#/components/responses/Error" } } }
-  /devices/{name}/worlds/{world}/reset:
-    parameters: [{ $ref: "#/components/parameters/name" }, { name: world, in: path, required: true, schema: { type: string } }]
-    post: { summary: Reset the device to the world (seconds on disk, then a normal boot; same identity), responses: { "202": { $ref: "#/components/responses/Job" } } }
-  /devices/{name}/worlds/{world}/fork:
-    parameters: [{ $ref: "#/components/parameters/name" }, { name: world, in: path, required: true, schema: { type: string } }]
-    post:
-      summary: New devices from the world (own identity each, shared /data, no image copy)
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [prefix], properties: { prefix: { type: string, pattern: "^[a-z0-9]{1,12}$" }, count: { type: integer, minimum: 1, maximum: 20, default: 1 } } } } } }
-      responses: { "202": { description: Accepted, content: { application/json: { schema: { type: object, properties: { job: { type: object }, world: { type: string }, devices: { type: array, items: { type: string } } } } } } }, "409": { $ref: "#/components/responses/Error" } }
   /devices/{name}/logs:
     parameters: [{ $ref: "#/components/parameters/name" }]
     get:

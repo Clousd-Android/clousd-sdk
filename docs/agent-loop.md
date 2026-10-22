@@ -68,19 +68,14 @@ error to retry.
 
 ## Reset between runs
 
-An evaluation is only comparable when every episode starts from the same state. Save a snapshot once the phone is
-set up (apps installed, account signed in, permissions granted) and restore it before each run:
+An evaluation is only comparable when every episode starts from the same state. Reset the phone before each run:
 
 ```python
-snap = next(s for s in phone.snapshots() if s["restorable"])
-phone.restore(snap["id"])      # seconds, the phone keeps its identity and network
+phone.reset()                  # apps and data wiped, same model and Android; 1-5 minutes
 ```
 
-Restore returns a job; the client waits for it by default. The phone comes back booted, with the same model
-identity, SIM, network exit and installed apps, and the app data as it was at the snapshot.
-
-To run many episodes in parallel, clone the snapshot into new phones (`POST /snapshots/{id}/clone`): each clone is
-a separate device with its own identity.
+Reset returns a job; the client waits for it by default. The phone comes back booted and clean, as a new phone of
+the same model. Install the apps the episode needs and sign in as part of the run, or keep a separate phone per setup.
 
 ## Things that cost us the most time
 

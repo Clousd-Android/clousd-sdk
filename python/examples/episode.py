@@ -17,10 +17,8 @@ def run(device_name: str, goal_text: str = "Chrome", steps: int = 10) -> bool:
     c = Clousd()
     phone = c.device(device_name)
 
-    # 1. reset: the newest restorable snapshot is the clean starting state
-    snaps = [s for s in phone.snapshots() if s.get("restorable")]
-    if snaps:
-        phone.restore(snaps[0]["id"])
+    # 1. reset: wipe apps and data, start from a fresh phone
+    phone.reset()
 
     for _ in range(steps):
         # 2. look

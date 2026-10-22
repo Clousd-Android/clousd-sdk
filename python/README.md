@@ -65,8 +65,7 @@ print(hook["secret"])                                    # shown once: verify X-
 ```python
 phone = c.device("dev_04f2")
 
-snap = next(s for s in phone.snapshots() if s["restorable"])
-phone.restore(snap["id"])                      # every run starts from the same state
+phone.reset()                                  # fresh phone: apps and data wiped
 
 phone.open_app("com.android.chrome")
 phone.tap_text("Search")
@@ -80,10 +79,10 @@ phone.act("tap", seq=obs["seq"], x=540, y=1200, settle=True)
 
 | Look | Act | State |
 |---|---|---|
-| `screenshot(width=None)`, `observe(width, ui)` | `tap(x, y)`, `swipe(...)`, `scroll("down")`, `long_press(...)` | `snapshots()`, `save_snapshot()` |
-| `screen_text()`, `find_text(text)`, `size()` | `type(text)`, `key("back")`, `tap_text(text)`, `wait_text(text)` | `restore(id)`, `clone(id, name)` |
-| `installed()`, `notifications()`, `clipboard_get()` | `open_app(pkg)`, `close_app(pkg)`, `open_url(url)`, `intent(...)`, `settings("wifi")` | `start()`, `stop()`, `restart()` |
-| `app_info(pkg)`, `crashes(pkg)`, `health()`, `screenrecord(seconds)` | `act(op, settle, seq, ...)`, `clipboard_set(text)` | `c.job(id).wait()` |
+| `screenshot(width=None)`, `observe(width, ui)` | `tap(x, y)`, `swipe(...)`, `scroll("down")`, `long_press(...)` | `start()`, `stop()`, `restart()` |
+| `screen_text()`, `find_text(text)`, `size()` | `type(text)`, `key("back")`, `tap_text(text)`, `wait_text(text)` | `reset()` |
+| `installed()`, `notifications()`, `clipboard_get()` | `open_app(pkg)`, `close_app(pkg)`, `open_url(url)`, `intent(...)`, `settings("wifi")` | `c.job(id).wait()` |
+| `app_info(pkg)`, `crashes(pkg)`, `health()`, `screenrecord(seconds)` | `act(op, settle, seq, ...)`, `clipboard_set(text)` | |
 | `c.devices()`, `c.find("Pixel 7 #3")`, `c.balance()` | `device.rename(...)`, `c.create_device(...)` | `device.network()`, `c.proxies()`, `c.bind_proxy(id, phones)` |
 
 Coordinates are device pixels (`size()` gives the screen). Long device operations return a `Job`; they wait by default,

@@ -97,9 +97,8 @@ curl -H "Authorization: Bearer cl_live_..." "https://api.clousd.com/v1/devices/d
 | `GET`/`POST /schedules`, `POST /schedules/{id}/toggle`, `/delete` | tasks at a time on days of the week |
 | `GET`/`POST /credentials`, `POST /credentials/{id}/fields`, `DELETE …` | saved logins; values are never returned |
 | `GET`/`POST /webhooks`, `…/{id}/rotate`, `/toggle`, `/test`, `GET …/deliveries` | events to your server, signed with your secret |
-| `GET /devices`, `GET /devices/{name}`, `POST /devices`, `start`/`stop`/`restart` | phones of the key and their lifecycle |
+| `GET /devices`, `GET /devices/{name}`, `POST /devices`, `start`/`stop`/`restart`/`reset` | phones of the key and their lifecycle; `reset` wipes apps and data |
 | `GET /devices/{name}/observe`, `POST /devices/{name}/act`, `/screenshot`, `/screenrecord` | the screen, step by step |
-| `GET`/`POST /devices/{name}/snapshots`, `…/restore`, `…/clone` | saved states |
 | `GET`/`POST /devices/{name}/network`, `GET`/`POST /proxies` | the phone's network exit |
 | `GET`/`POST`/`DELETE /devices/{name}/adb` | ADB over a relay: one-time code, IP allow-list, expiry |
 | `GET /balance` | plan, phones, money left and warnings to show the user |
@@ -114,11 +113,17 @@ Full description: [`openapi.yaml`](openapi.yaml); reference: [clousd.com/docs/re
 | Part | What it is |
 |---|---|
 | [`openapi.yaml`](openapi.yaml) | OpenAPI 3.1 description of the public API v1 (`https://api.clousd.com/v1`) |
-| [`python/`](python) | `clousd`: Python client (runs, schedules, logins, webhooks, devices, observe/act, snapshots), `clousd.agent` (a step-by-step loop on your own model), `clousd.bench`, the `clousd` CLI |
+| [`python/`](python) | `clousd`: Python client (runs, schedules, logins, webhooks, devices, observe/act, reset), `clousd.agent` (a step-by-step loop on your own model), `clousd.bench`, the `clousd` CLI |
 | [`mcp/`](mcp) | `clousd-mcp`: the MCP server, local or hosted |
 | [`skills/clousd`](skills/clousd/SKILL.md) | skill for coding agents: how to work with Clousd phones |
 | [`docs/agent-loop.md`](docs/agent-loop.md) | driving a phone yourself: the observe → act → verify loop |
 | [`server.json`](server.json), [`smithery.yaml`](smithery.yaml) | registry metadata |
+
+## Upgrading from 1.1
+
+1.2 removes saved device states. `/v1/devices/{name}/snapshots`, `/profiles` and `/worlds` answer `410`; to start from a
+clean phone call `POST /v1/devices/{name}/reset` (apps and data are wiped, the model and Android stay the same). Python:
+`device.reset()` replaces `snapshots()`, `save_snapshot()`, `restore()` and `clone()`.
 
 ## Upgrading from 0.3
 
