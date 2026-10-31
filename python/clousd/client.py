@@ -99,7 +99,7 @@ class Clousd:
     def create_device(self, profile: str, network: Optional[Dict[str, Any]] = None, plan: str = "metered",
                       idempotency_key: Optional[str] = None, region: Optional[str] = None, burner: bool = False,
                       label: str = "", wait: bool = True, timeout: float = 600) -> "Device":
-        """Create one device on this account (charged like the dashboard: creation fee, first month for plan monthly,
+        """Create one device on this account (creating is free; it runs pay as you go by the minute from the balance,
         paid exits metered per GB). `profile` from models(); `network` like {"type": "residential", "country": "US"} or
         {"type": "byo", "url": "socks5://…"}; `idempotency_key` - a retry with the same key within 10 minutes is not
         charged twice (one is generated if not given). With wait=True returns once the device is running."""
@@ -143,6 +143,7 @@ class Clousd:
             credentials: Optional[List[Any]] = None, output_schema: Optional[Dict[str, Any]] = None,
             mode: str = "auto", max_steps: Optional[int] = None, timeout: Optional[int] = None,
             options: Optional[Dict[str, Any]] = None, idempotency_key: Optional[str] = None,
+            files: Optional[List[Any]] = None,
             wait: bool = False, wait_timeout: float = 1800) -> "Run":
         """Give one phone (`device`) or several (`devices`, up to 32 - one run each, all started at once) a task in plain
         words: "open Settings and tell me the Android version", "sign in to the app with the saved login". Clousd's agent
@@ -154,6 +155,8 @@ class Clousd:
         mode: "auto" (default) - the agent does not stop to ask; "ask" - it asks before risky steps (`run.card`, answer it).
         max_steps / timeout (seconds) / options: limits and the rest of the options (reasoning, vision, recording...).
         idempotency_key: a retry with the same key and body returns the same run instead of starting a new one.
+        files: library files for the task (ids from media() / upload_media(), up to 8): they are placed on the phone before the
+            first step - photos and videos in the gallery, documents in Downloads, apks installed - and the agent is told where.
         Returns a Run right away (status queued / running); `wait=True` returns when it has finished."""
         body: Dict[str, Any] = {"task": task, "model": {"provider": "clousd"}, "source": "sdk"}
         if devices:
@@ -171,6 +174,8 @@ class Clousd:
         body["options"] = opts
         if credentials:
             body["credentials"] = [{"package": str(x.get("package", "")), "name": str(x.get("name", ""))} for x in credentials]
+        if files:
+            body["files"] = [int(f["id"]) if isinstance(f, dict) else int(f) for f in files]
         headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
         r = self.request("POST", "runs", json=body, timeout=90, headers=headers)
         run = Run(self, r.get("run", {}), r.get("runs"))
@@ -307,12 +312,13 @@ class Clousd:
 
     # -- media library ------------------------------------------------------------------------------------------
     def media(self, kind: str = "") -> List[Dict[str, Any]]:
-        """The media library (Settings → Storage): id, kind (image | video), title, size."""
+        """The Library (dashboard → Library): id, kind (image | video | doc | apk), title, name, size, folder.
+        Pass ids to run(files=[...]) to put files on the phone for a task."""
         return self.request("GET", "media", params={"kind": kind} if kind else None).get("media", [])
 
     def upload_media(self, data: Any, name: str = "", folder: Optional[int] = None) -> Dict[str, Any]:
-        """Add a photo or video to the library (up to 25 MB): `data` is bytes or a file path; `name` keeps the extension
-        (.jpg .png .webp .mp4 .mov)."""
+        """Add a file to the Library (up to 50 MB over the API): `data` is bytes or a file path; `name` keeps the extension -
+        photo (.jpg .png .webp .heic), video (.mp4 .mov), document (.pdf .txt .csv .md .json .docx .xlsx .zip) or .apk."""
         import base64
         import os
         if isinstance(data, (str, os.PathLike)):

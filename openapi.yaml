@@ -1,4 +1,7 @@
 openapi: 3.1.0
+# Публичный API v1 - часть для скриптов и ИИ-агентов (23.09.2026). Источник правды по поведению - gateway/v1.go,
+# gateway/action.go, gateway/agent.go и docs/api-public.md; отсюда генерируются клиенты (TS и др.), Python пишется руками
+# (sdk/python). Новый маршрут в v1.go = строка здесь.
 info:
   title: CLOUSD API
   version: "1.0"
@@ -37,6 +40,7 @@ paths:
                 device: { type: string }
                 devices: { type: array, items: { type: string }, maxItems: 32 }
                 credentials: { type: array, items: { type: object, properties: { package: { type: string }, name: { type: string } } } }
+                files: { type: array, maxItems: 8, items: { type: integer }, description: "Library file ids (GET /media) placed on the phone before the first step: photos and videos in the gallery, documents in Downloads, apks installed; the run lists them with their paths" }
                 options:
                   type: object
                   properties:
@@ -187,8 +191,8 @@ paths:
     post:
       summary: Create a device (charged to the account of the API key)
       description: >
-        One device per call. The account is charged as in the dashboard (creation fee, plus the first month for plan
-        monthly); a paid network exit (mobile, residential, isp, datacenter) is metered per GB. Idempotency-Key (header, or
+        One device per call. Creating a phone is free; it runs pay as you go by the minute from the account balance
+        (a plan's minutes are used first); a paid network exit (mobile, residential, isp, datacenter) is metered per GB. Idempotency-Key (header, or
         idempotency_key / name in the body) is required - a retry with the same key within 10 minutes returns the same
         answer and is not charged twice. The device boots in one to three minutes: poll GET /devices/{name}.
       parameters: [{ name: Idempotency-Key, in: header, required: false, schema: { type: string, maxLength: 120 } }]
@@ -202,7 +206,6 @@ paths:
               properties:
                 profile: { type: string, description: model id from GET /models }
                 network: { type: object, properties: { type: { type: string, enum: [off, byo, mobile, residential, isp, datacenter] }, country: { type: string, description: ISO-2 for paid exits }, url: { type: string, description: "socks5:// or http:// for byo" } } }
-                plan: { type: string, enum: [metered, monthly], default: metered }
                 region: { type: string, description: where the device itself runs (ISO-2); default - the exit country }
                 burner: { type: boolean, description: disposable - stopping deletes it }
                 idempotency_key: { type: string }
@@ -412,19 +415,31 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
   /media:
     get:
-      summary: The media library - photos and videos with their ids
-      parameters: [{ name: kind, in: query, schema: { type: string, enum: [image, video] } }]
+      summary: The Library - photos, videos, documents and apps with their ids and folders
+      parameters: [{ name: kind, in: query, schema: { type: string, enum: [image, video, doc, apk] } }, { name: folder, in: query, schema: { type: integer } }]
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: object } } } }
     post:
-      summary: Upload a photo or video - {name, data_b64, folder}, up to 25 MB
-      description: Publish it from a group with {"op":"publish","package":...,"text":"post","media_id":<id>,"caption":...}.
+      summary: Upload a file - {name, data_b64, folder}, up to 50 MB (photo, video, document or apk by the name's extension)
+      description: Pass the id in POST /runs files to put it on the phone for a task, or copy it to phones at once with /media/send.
       requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name, data_b64], properties: { name: { type: string, example: beach.jpg }, data_b64: { type: string }, folder: { type: integer } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /media/folders:
+    post:
+      summary: Create a Library folder - {name}
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, maxLength: 40 } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /media/move:
+    post:
+      summary: Move Library files into a folder - {ids, folder} (folder 0 = none)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { ids: { type: array, items: { type: integer } }, folder: { type: integer } } } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: object } } } }
   /media/send:
     post:
-      summary: Copy library files into phones' galleries, as if taken by that phone
+      summary: Copy Library files to phones now - photos and videos into the gallery as if taken there, documents into Downloads, apks installed
       requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { ids: { type: array, items: { type: integer } }, devices: { type: array, items: { type: string } } } } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: object } } } }

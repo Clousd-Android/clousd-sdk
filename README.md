@@ -119,6 +119,14 @@ Full description: [`openapi.yaml`](openapi.yaml); reference: [clousd.com/docs/re
 | [`docs/agent-loop.md`](docs/agent-loop.md) | driving a phone yourself: the observe → act → verify loop |
 | [`server.json`](server.json), [`smithery.yaml`](smithery.yaml) | registry metadata |
 
+## Upgrading from 1.2
+
+1.3 adds the Library: `GET /v1/media` lists the account's files (photos, videos, documents, apks) with ids and folders,
+`POST /v1/media` uploads one, `POST /v1/media/send` copies files to phones. Pass ids to `POST /v1/runs` as `files` and they are
+placed on the phone before the first step (photos and videos in the gallery, documents in Downloads, apks installed). SDK:
+`c.run(task, files=[...])`, `c.media()`, `c.upload_media()`, `c.send_media()`; MCP: the `library` tool and `files` on `run`.
+Creating a device no longer takes `plan`: phones run pay as you go, a plan's minutes are used first.
+
 ## Upgrading from 1.1
 
 1.2 removes saved device states. `/v1/devices/{name}/snapshots`, `/profiles` and `/worlds` answer `410`; to start from a

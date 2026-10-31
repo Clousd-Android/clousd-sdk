@@ -295,13 +295,15 @@ def run(task: Annotated[str, Field(description="the goal in plain words, e.g. \"
         output_schema: Annotated[str, Field(description="optional JSON Schema: the answer also comes back as structured_output in this shape")] = "",
         mode: Annotated[str, Field(description="auto (default): works without stopping; ask: asks before risky steps (answer them)")] = "auto",
         max_steps: Annotated[int, Field(description="step limit, default 100")] = 0,
+        files: Annotated[str, Field(description="Library files to put on the phone before the task: ids from the library tool, comma-separated (up to 8). Photos and videos land in the gallery, documents in Downloads, apks are installed; the agent is told where each one is")] = "",
         wait_seconds: Annotated[int, Field(description=f"wait up to this long for the result, 0..{WAIT_MAX}")] = 40,
         ctx: Optional[Context] = None) -> Dict[str, Any]:
     """Give phones a task. Clousd's agent looks at the screen, taps and types until the goal is reached, and finishes with
     an answer. Several devices = the same task on each, all at once (one run per phone under one parent). Returns the
     run with its status; if it is still going, follow it with run_status. A run in mode=ask may stop with waiting_for:
     reply with answer. Logins: never ask the user for passwords - pass credentials; their values are typed on the phone
-    without you or the model seeing them."""
+    without you or the model seeing them. A task that needs a file (post this photo, fill this form from this PDF, install
+    this app): upload it once with the library tool and pass its id in files - do not push files by hand each time."""
     _use(ctx)
     try:
         names = _devs(devices)
@@ -315,12 +317,47 @@ def run(task: Annotated[str, Field(description="the goal in plain words, e.g. \"
                 return {"error": f"credentials: \"package/name\" items, got {x!r}"}
             pk, nm = x.split("/", 1)
             creds.append({"package": pk.strip(), "name": nm.strip()})
+        fids = []
+        for x in [f.strip() for f in files.split(",") if f.strip()]:
+            if not x.isdigit():
+                return {"error": f"files: library ids (numbers) from the library tool, got {x!r}"}
+            fids.append(int(x))
         schema = json.loads(output_schema) if output_schema.strip() else None
         r = client().run(task, device=names[0] if len(names) == 1 else None, devices=names if len(names) > 1 else None,
                          credentials=creds or None, output_schema=schema, mode=mode if mode in ("auto", "ask") else "auto",
-                         max_steps=max_steps or None)
+                         max_steps=max_steps or None, files=fids or None)
         return _run_view(_wait(r, wait_seconds), steps=5)
     except (ClousdError, ValueError) as e:
+        return {"error": _err(e)}
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Library", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+def library(op: Annotated[str, Field(description="list (default) | upload | send")] = "list",
+            path: Annotated[str, Field(description="upload: a local file to add - photo (.jpg .png .webp .heic), video (.mp4 .mov), document (.pdf .txt .csv .md .json .docx .xlsx .zip) or .apk, up to 50 MB")] = "",
+            kind: Annotated[str, Field(description="list: only this kind - image | video | doc | apk (empty = all)")] = "",
+            ids: Annotated[str, Field(description="send: library ids, comma-separated")] = "",
+            devices: Annotated[str, Field(description="send: devices to copy the files to (names, labels or numbers)")] = "",
+            ctx: Optional[Context] = None) -> Dict[str, Any]:
+    """The user's Library on Clousd: every file they want on their phones lives here once (photos, videos, documents, apps)
+    and is used by id. op=list shows it; op=upload adds a local file and returns its id; op=send copies files to phones
+    right away (photos and videos into the gallery as if taken there, documents into Downloads, apks installed). For a
+    task that needs a file, prefer run(files=...) - the file is placed on the phone before the first step."""
+    _use(ctx)
+    try:
+        c = client()
+        if op == "upload":
+            if not path:
+                return {"error": "path: a local file"}
+            m = c.upload_media(path)
+            return {"ok": True, "file": m, "hint": "pass its id in run(files=...) or library(op=send)"}
+        if op == "send":
+            fids = [int(x) for x in ids.split(",") if x.strip().isdigit()]
+            names = _devs(devices)
+            if not fids or not names:
+                return {"error": "send: ids and devices are required"}
+            return c.send_media(fids, names)
+        return {"files": c.media(kind)}
+    except (ClousdError, ValueError, OSError) as e:
         return {"error": _err(e)}
 
 
