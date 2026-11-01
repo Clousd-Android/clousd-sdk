@@ -80,7 +80,9 @@ phone.act("tap", seq=obs["seq"], x=540, y=1200, settle=True)
 | Look | Act | State |
 |---|---|---|
 | `screenshot(width=None)`, `observe(width, ui)` | `tap(x, y)`, `swipe(...)`, `scroll("down")`, `long_press(...)` | `start()`, `stop()`, `restart()` |
-| `screen_text()`, `find_text(text)`, `size()` | `type(text)`, `key("back")`, `tap_text(text)`, `wait_text(text)` | `reset()` |
+| `screen_text()`, `find_text(text)`, `size()` | `type(text)`, `key("back")`, `tap_text(text)`, `wait_text(text)` | `reset()` (any state) |
+| | | `delete()` → Trash 14 days, `delete(forever=True)` |
+| | | `c.trash()`, `c.restore(device)` |
 | `installed()`, `notifications()`, `clipboard_get()` | `open_app(pkg)`, `close_app(pkg)`, `open_url(url)`, `intent(...)`, `settings("wifi")` | `c.job(id).wait()` |
 | `app_info(pkg)`, `crashes(pkg)`, `health()`, `screenrecord(seconds)` | `act(op, settle, seq, ...)`, `clipboard_set(text)` | |
 | `c.devices()`, `c.find("Pixel 7 #3")`, `c.balance()` | `device.rename(...)`, `c.create_device(...)` | `device.network()`, `c.proxies()`, `c.bind_proxy(id, phones)` |

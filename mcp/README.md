@@ -16,7 +16,7 @@ Docs: [clousd.com/docs/mcp](https://clousd.com/docs/mcp/). Source: [github.com/C
 | Tool | What it does |
 |---|---|
 | `account` | Plan, phones, money left and warnings to tell the user |
-| `devices` | The phones this key can use (name, label, number, state, model, Android, exit); start, stop, rename |
+| `devices` | The phones this key can use (name, label, number, state, model, Android, exit); start, stop, restart, reset to a fresh state, rename; delete (to Trash for 14 days, or forever), what is in Trash, restore |
 | `run` | Give one or many phones a task in plain words; waits up to 50 s and returns the status, the answer or what it waits on, and a replay link |
 | `run_status` | Follow a run (status, last steps, per-phone results), list recent runs, cancel, or tell the running agent something |
 | `answer` | Reply to a run that asks a question or asks permission for a step |

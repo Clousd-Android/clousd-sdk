@@ -96,6 +96,16 @@ class Clousd:
                 return d
         raise ClousdError(404, "no_such_device", f"no device named {label!r}")
 
+    def trash(self) -> List[Dict[str, Any]]:
+        """Devices in Trash: deleted phones kept for 14 days (stopped, not billed). Each has name, label, model, deleted_at,
+        purge_at, reason (user / api / stopped / expired) and ready (true once the copy is safe in storage)."""
+        return self.request("GET", "trash").get("trash", [])
+
+    def restore(self, device: Any) -> Dict[str, Any]:
+        """Bring a device back from Trash. It returns stopped, with its apps and data; start it as usual."""
+        name = device.name if isinstance(device, Device) else str(device)
+        return self.request("POST", f"trash/{name}/restore")
+
     def create_device(self, profile: str, network: Optional[Dict[str, Any]] = None, plan: str = "metered",
                       idempotency_key: Optional[str] = None, region: Optional[str] = None, burner: bool = False,
                       label: str = "", wait: bool = True, timeout: float = 600) -> "Device":
@@ -523,8 +533,15 @@ class Device:
         return self.client._job(self.client.request("POST", self._p("restart")), wait, timeout)
 
     def reset(self, wait: bool = True, timeout: float = 900) -> Job:
-        """Reset to a fresh state: apps and data are wiped, the phone comes back like new (same model and Android)."""
+        """Reset to a fresh state: apps and data are wiped, the phone comes back like new (same model and Android).
+        Works in any state: a running phone restarts clean, a stopped one is wiped and starts clean next time."""
         return self.client._job(self.client.request("POST", self._p("reset")), wait, timeout)
+
+    def delete(self, forever: bool = False) -> Dict[str, Any]:
+        """Delete the phone. By default it moves to Trash for 14 days (stopped, not billed, apps and data kept) and
+        `Clousd.restore()` brings it back; `forever=True` wipes it with all its data at once and cannot be undone.
+        On an account that has never paid the phone is always deleted at once."""
+        return self.client.request("DELETE", self._p(), params={"forever": "1"} if forever else None)
 
     def logs(self) -> Any:
         """Recent logcat lines."""

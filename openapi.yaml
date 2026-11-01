@@ -223,6 +223,26 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: object, properties: { device: { $ref: "#/components/schemas/Device" } } } } } }
         "404": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: "Delete the device: it moves to Trash for 14 days (not running, not billed) and can be restored; forever=1 deletes it with its data at once. On an account that has never paid, the device is always deleted at once."
+      parameters: [{ name: forever, in: query, required: false, schema: { type: string, enum: ["1"] } }]
+      responses:
+        "200": { description: "Moved to Trash", content: { application/json: { schema: { type: object, properties: { trashed: { type: boolean }, device: { type: string }, purge_at: { type: string, format: date-time }, note: { type: string } } } } } }
+        "202": { $ref: "#/components/responses/Job" }
+        "409": { $ref: "#/components/responses/Error" }
+  /trash:
+    get:
+      summary: Devices in Trash, with when each one is deleted for good
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { trash: { type: array, items: { type: object, properties: { name: { type: string }, label: { type: string }, model: { type: string }, deleted_at: { type: string, format: date-time }, purge_at: { type: string, format: date-time }, reason: { type: string, enum: [user, api, stopped, expired] }, ready: { type: boolean } } } } } } } } }
+  /trash/{name}/restore:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post:
+      summary: Bring a device back from Trash as a stopped device (start it when you need it)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { device: { type: string }, state: { type: string }, note: { type: string } } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
   /devices/{name}/start:
     parameters: [{ $ref: "#/components/parameters/name" }]
     post: { summary: Start the device, responses: { "202": { $ref: "#/components/responses/Job" } } }

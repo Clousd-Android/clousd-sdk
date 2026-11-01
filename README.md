@@ -98,6 +98,7 @@ curl -H "Authorization: Bearer cl_live_..." "https://api.clousd.com/v1/devices/d
 | `GET`/`POST /credentials`, `POST /credentials/{id}/fields`, `DELETE …` | saved logins; values are never returned |
 | `GET`/`POST /webhooks`, `…/{id}/rotate`, `/toggle`, `/test`, `GET …/deliveries` | events to your server, signed with your secret |
 | `GET /devices`, `GET /devices/{name}`, `POST /devices`, `start`/`stop`/`restart`/`reset` | phones of the key and their lifecycle; `reset` wipes apps and data |
+| `DELETE /devices/{name}` (`?forever=1`), `GET /trash`, `POST /trash/{name}/restore` | delete moves the phone to Trash for 14 days (stopped, not billed, restorable); `forever=1` wipes it at once |
 | `GET /devices/{name}/observe`, `POST /devices/{name}/act`, `/screenshot`, `/screenrecord` | the screen, step by step |
 | `GET`/`POST /devices/{name}/network`, `GET`/`POST /proxies` | the phone's network exit |
 | `GET`/`POST`/`DELETE /devices/{name}/adb` | ADB over a relay: one-time code, IP allow-list, expiry |

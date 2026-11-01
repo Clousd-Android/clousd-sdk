@@ -28,7 +28,10 @@ in the URL. Never print the key back in full, never store it in a project file.
    words, with the `top_up` link.
 2. **Look at the phones.** `devices` (op=list): every phone has a `label` (the name the user sees, e.g. "Pixel 7 #3")
    and a `number`; every tool accepts the name, the label or the number. A stopped phone starts with `devices op=start`
-   (one to three minutes).
+   (one to three minutes). `devices op=reset` returns a phone to a fresh state (apps and data wiped, same model and
+   Android) - ask the user first. `devices op=delete` moves a phone to Trash for 14 days (stopped, not billed, data kept;
+   `op=trash` lists it, `op=restore` brings it back stopped); `forever=true` wipes it at once and cannot be undone - only
+   when the user says so explicitly.
 3. **Give the phone the goal, not the taps.** `run task="..." devices=...` - Clousd's agent works the screen and
    finishes with an answer. Write the task like you would for a person: what to open, what to do, what to report back.
    Pass `output_schema` when you need the answer as JSON.
@@ -60,4 +63,5 @@ in the URL. Never print the key back in full, never store it in a project file.
 - Up to 32 phones per run; split bigger sets.
 - 60 API requests a minute per key (120 per device route); the tools retry on 429.
 - A phone does one task at a time; a second run on it waits in the queue.
-- Stopped phones keep their apps and data; starting one takes one to three minutes.
+- Stopped phones keep their apps and data; starting one takes one to three minutes. A phone that stays stopped for
+  30 days moves to Trash, and Trash is emptied after 14 more days.

@@ -203,28 +203,51 @@ def account(ctx: Optional[Context] = None) -> Dict[str, Any]:
         return {"error": _err(e)}
 
 
-@mcp.tool(annotations=ToolAnnotations(title="Devices", readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False))
-def devices(op: Annotated[str, Field(description="list (default) | start | stop | rename")] = "list",
-            device: Annotated[str, Field(description="device (name, label or number), for start / stop / rename")] = "",
+@mcp.tool(annotations=ToolAnnotations(title="Devices", readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
+def devices(op: Annotated[str, Field(description="list (default) | start | stop | restart | reset | rename | delete | trash | restore")] = "list",
+            device: Annotated[str, Field(description="device (name, label or number) - for everything except list and trash")] = "",
             label: Annotated[str, Field(description="rename: the new name, up to 40 characters")] = "",
+            forever: Annotated[bool, Field(description="delete: true wipes the phone with all its data at once instead of moving it to Trash (cannot be undone)")] = False,
             ctx: Optional[Context] = None) -> Dict[str, Any]:
     """Phones this key can use.
     op=list: name, label (the name people see in the dashboard, e.g. "Pixel 7 #3"), number, state (running / stopped /
     starting), model, Android version and network exit. Every tool takes the name, the label or the number.
-    op=start / op=stop with device: start a stopped phone (one to three minutes until it has booted) or stop one (it keeps
-    its apps and data). op=rename with device and label: give a phone a name (empty = back to "Model #N")."""
+    op=start / op=stop / op=restart with device: start a stopped phone (one to three minutes until it has booted), stop one
+    (it keeps its apps and data) or restart it. op=reset with device: back to a fresh state - apps and data wiped, same model
+    and Android; works whether the phone runs or is stopped. Ask the user before reset.
+    op=rename with device and label: give a phone a name (empty = back to "Model #N").
+    op=delete with device: the phone moves to Trash for 14 days - stopped, not billed, apps and data kept - and op=restore
+    brings it back (stopped). forever=true deletes it with all its data at once and cannot be undone: only when the user
+    says so. op=trash: what is in Trash (name, label, model, deleted_at, purge_at, reason). op=restore with device: back
+    from Trash (the name or label as shown by op=trash)."""
     _use(ctx)
     try:
         if op == "list":
             return {"devices": [d.data for d in client().devices()]}
-        if op in ("start", "stop") and device:
+        if op == "trash":
+            t = client().trash()
+            return {"trash": t, "note": "deleted phones stay here 14 days, then they are deleted for good; op=restore brings one back stopped"}
+        if op == "restore" and device:
+            want = device.strip().lower().lstrip("#")
+            name = device.strip()
+            for t in client().trash():
+                if want in (str(t.get("name") or "").lower(), str(t.get("label") or "").lower(), str(t.get("number") or "")):
+                    name = str(t["name"]); break
+            r = client().restore(name)
+            _names.pop(_key.get() or "env", None)
+            return r
+        if op == "delete" and device:
+            r = client().device(_resolve(device)).delete(forever=bool(forever))
+            _names.pop(_key.get() or "env", None)
+            return r
+        if op in ("start", "stop", "restart", "reset") and device:
             d = client().device(_resolve(device))
-            return {"result": (d.start() if op == "start" else d.stop()).output or "ok"}
+            return {"result": getattr(d, op)().output or "ok"}
         if op == "rename" and device:
             r = client().device(_resolve(device)).rename(label)
             _names.pop(_key.get() or "env", None)
             return r
-        return {"error": "op is list, start, stop or rename (they need device)"}
+        return {"error": "op is list, start, stop, restart, reset, rename, delete, trash or restore (all but list and trash need device)"}
     except ClousdError as e:
         return {"error": _err(e)}
 
