@@ -210,15 +210,15 @@ def devices(op: Annotated[str, Field(description="list (default) | start | stop 
             forever: Annotated[bool, Field(description="delete: true wipes the phone with all its data at once instead of moving it to Trash (cannot be undone)")] = False,
             ctx: Optional[Context] = None) -> Dict[str, Any]:
     """Phones this key can use.
-    op=list: name, label (the name people see in the dashboard, e.g. "Pixel 7 #3"), number, state (running / stopped /
-    starting), model, Android version and network exit. Every tool takes the name, the label or the number.
+    op=list: name, label (the name people see in the dashboard, e.g. "Phone #3"), number, state (running / stopped /
+    starting), Android version and network exit. Every tool takes the name, the label or the number.
     op=start / op=stop / op=restart with device: start a stopped phone (one to three minutes until it has booted), stop one
-    (it keeps its apps and data) or restart it. op=reset with device: back to a fresh state - apps and data wiped, same model
-    and Android; works whether the phone runs or is stopped. Ask the user before reset.
-    op=rename with device and label: give a phone a name (empty = back to "Model #N").
+    (it keeps its apps and data) or restart it. op=reset with device: back to a fresh state - apps and data wiped, same
+    Android version; works whether the phone runs or is stopped. Ask the user before reset.
+    op=rename with device and label: give a phone a name (empty = back to "Phone #N").
     op=delete with device: the phone moves to Trash for 14 days - stopped, not billed, apps and data kept - and op=restore
     brings it back (stopped). forever=true deletes it with all its data at once and cannot be undone: only when the user
-    says so. op=trash: what is in Trash (name, label, model, deleted_at, purge_at, reason). op=restore with device: back
+    says so. op=trash: what is in Trash (name, label, android, deleted_at, purge_at, reason). op=restore with device: back
     from Trash (the name or label as shown by op=trash)."""
     _use(ctx)
     try:

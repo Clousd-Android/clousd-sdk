@@ -183,6 +183,12 @@ paths:
   /webhooks/{id}/deliveries:
     get:
       summary: Recent deliveries with status and response time
+  /android:
+    get:
+      summary: Android versions you can create devices on
+      description: Create a device with one of them - POST /devices {android}. The phone model is picked by the service.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { android: { type: array, items: { type: string }, example: ["12", "13", "14", "15", "16", "17"] }, note: { type: string } } } } } }
   /devices:
     get:
       summary: Devices this key can see
@@ -202,16 +208,17 @@ paths:
           application/json:
             schema:
               type: object
-              required: [profile]
+              required: [android]
               properties:
-                profile: { type: string, description: model id from GET /models }
+                android: { type: string, example: "14", description: "Android version from GET /android. The phone model is picked by the service" }
+                label: { type: string, maxLength: 40, description: 'the name shown in the dashboard; empty = "Phone #N"' }
                 network: { type: object, properties: { type: { type: string, enum: [off, byo, mobile, residential, isp, datacenter] }, country: { type: string, description: ISO-2 for paid exits }, url: { type: string, description: "socks5:// or http:// for byo" } } }
                 region: { type: string, description: where the device itself runs (ISO-2); default - the exit country }
                 burner: { type: boolean, description: disposable - stopping deletes it }
                 idempotency_key: { type: string }
       responses:
         "202": { description: Creating, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, name: { type: string }, ext_id: { type: string }, state: { type: string, const: starting }, poll: { type: string }, charged_cents: { type: integer }, android: { type: string } } } } } }
-        "400": { description: bad_profile | bad_network | bad_request, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "400": { description: "bad_android (the answer lists the available versions) | bad_network | bad_request", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "402": { description: insufficient_funds - add funds in the dashboard, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "403": { description: only account API keys can create devices }
         "409": { description: limit (50 devices per account) | processing (same Idempotency-Key still running) }
@@ -234,7 +241,7 @@ paths:
     get:
       summary: Devices in Trash, with when each one is deleted for good
       responses:
-        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { trash: { type: array, items: { type: object, properties: { name: { type: string }, label: { type: string }, model: { type: string }, deleted_at: { type: string, format: date-time }, purge_at: { type: string, format: date-time }, reason: { type: string, enum: [user, api, stopped, expired] }, ready: { type: boolean } } } } } } } } }
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { trash: { type: array, items: { type: object, properties: { name: { type: string }, label: { type: string }, android: { type: string }, deleted_at: { type: string, format: date-time }, purge_at: { type: string, format: date-time }, reason: { type: string, enum: [user, api, stopped, expired] }, ready: { type: boolean } } } } } } } } }
   /trash/{name}/restore:
     parameters: [{ $ref: "#/components/parameters/name" }]
     post:
@@ -254,7 +261,7 @@ paths:
     post: { summary: Restart the device, responses: { "202": { $ref: "#/components/responses/Job" } } }
   /devices/{name}/reset:
     parameters: [{ $ref: "#/components/parameters/name" }]
-    post: { summary: "Reset the device to a fresh state: apps and data are wiped, the phone comes back like new (same model and Android, 1-5 min)", responses: { "202": { $ref: "#/components/responses/Job" } } }
+    post: { summary: "Reset the device to a fresh state: apps and data are wiped, the phone comes back like new (same Android version, 1-5 min)", responses: { "202": { $ref: "#/components/responses/Job" } } }
   /devices/{name}/screenshot:
     parameters: [{ $ref: "#/components/parameters/name" }]
     get:
@@ -508,6 +515,9 @@ components:
       type: object
       properties:
         name: { type: string }
+        label: { type: string, example: "Phone #3", description: 'the name shown in the dashboard; "Phone #N" unless renamed' }
+        number: { type: integer, example: 3 }
+        android: { type: string, example: "14" }
         state: { type: string, enum: [running, stopped, starting, error] }
     Run:
       type: object

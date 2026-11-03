@@ -97,7 +97,7 @@ class Clousd:
         raise ClousdError(404, "no_such_device", f"no device named {label!r}")
 
     def trash(self) -> List[Dict[str, Any]]:
-        """Devices in Trash: deleted phones kept for 14 days (stopped, not billed). Each has name, label, model, deleted_at,
+        """Devices in Trash: deleted phones kept for 14 days (stopped, not billed). Each has name, label, android, deleted_at,
         purge_at, reason (user / api / stopped / expired) and ready (true once the copy is safe in storage)."""
         return self.request("GET", "trash").get("trash", [])
 
@@ -106,16 +106,22 @@ class Clousd:
         name = device.name if isinstance(device, Device) else str(device)
         return self.request("POST", f"trash/{name}/restore")
 
-    def create_device(self, profile: str, network: Optional[Dict[str, Any]] = None, plan: str = "metered",
+    def create_device(self, android: str = "14", network: Optional[Dict[str, Any]] = None, plan: str = "metered",
                       idempotency_key: Optional[str] = None, region: Optional[str] = None, burner: bool = False,
                       label: str = "", wait: bool = True, timeout: float = 600) -> "Device":
         """Create one device on this account (creating is free; it runs pay as you go by the minute from the balance,
-        paid exits metered per GB). `profile` from models(); `network` like {"type": "residential", "country": "US"} or
-        {"type": "byo", "url": "socks5://…"}; `idempotency_key` - a retry with the same key within 10 minutes is not
-        charged twice (one is generated if not given). With wait=True returns once the device is running."""
+        paid exits metered per GB). `android` - a version from android_versions(), e.g. "14"; the phone model is picked
+        by the service. `network` like {"type": "residential", "country": "US"} or {"type": "byo", "url": "socks5://…"};
+        `label` - the name in the dashboard (empty = "Phone #N"); `idempotency_key` - a retry with the same key within
+        10 minutes is not charged twice (one is generated if not given). With wait=True returns once the device is running."""
         import uuid
-        body: Dict[str, Any] = {"profile": profile, "network": network or {"type": "off"}, "plan": plan, "burner": burner,
+        body: Dict[str, Any] = {"network": network or {"type": "off"}, "plan": plan, "burner": burner,
                                 "idempotency_key": idempotency_key or uuid.uuid4().hex}
+        a = str(android).strip().lower().replace("android", "").strip()
+        if a.isdigit():
+            body["android"] = a
+        else:
+            body["profile"] = str(android)   # before 1.5 the first argument was a model id; the API keeps only its Android version
         if region:
             body["region"] = region
         if label:
@@ -144,9 +150,16 @@ class Clousd:
         """What can be chosen when creating a device right now: {types, countries:[{code,name}], plans}."""
         return self.request("GET", "network/options")
 
+    def android_versions(self) -> List[str]:
+        """Android versions you can create devices on, e.g. ["12", "13", "14", "15", "16", "17"]."""
+        return [str(v) for v in self.request("GET", "android").get("android", [])]
+
     def models(self) -> List[Dict[str, Any]]:
-        """Phone models available to create devices from."""
-        return self.request("GET", "models").get("models", [])
+        """Removed in 1.5: devices are created by Android version and the model is picked by the service.
+        Kept so old code does not break - returns [{"android": "14"}, …]; use android_versions()."""
+        import warnings
+        warnings.warn("Client.models() is deprecated: use android_versions() and create_device(android=...)", DeprecationWarning, stacklevel=2)
+        return [{"android": v} for v in self.android_versions()]
 
     # -- tasks: a goal in plain words, done on the phone by Clousd's agent ------------------------------------------
     def run(self, task: str, device: Any = None, devices: Optional[List[Any]] = None,
@@ -533,7 +546,7 @@ class Device:
         return self.client._job(self.client.request("POST", self._p("restart")), wait, timeout)
 
     def reset(self, wait: bool = True, timeout: float = 900) -> Job:
-        """Reset to a fresh state: apps and data are wiped, the phone comes back like new (same model and Android).
+        """Reset to a fresh state: apps and data are wiped, the phone comes back like new (same Android version).
         Works in any state: a running phone restarts clean, a stopped one is wiped and starts clean next time."""
         return self.client._job(self.client.request("POST", self._p("reset")), wait, timeout)
 

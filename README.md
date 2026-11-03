@@ -8,8 +8,8 @@
 
 Every agent framework can tap a phone. Almost none has a phone worth tapping.
 
-**Clousd is the phone.** Each device is a full Android system built as a specific real model, Pixel to Galaxy to
-Xiaomi, with Google Play inside and its own network exit. Give it a task in plain words and Clousd's phone agent does
+**Clousd is the phone.** Each device is a full Android system on the Android version you pick (12 to 17), with Google
+Play inside and its own network exit. Give it a task in plain words and Clousd's phone agent does
 the steps and answers; or drive the screen yourself, step by step. Apps see a phone, not an emulator, so your agent
 sees the screens a person sees.
 
@@ -97,7 +97,7 @@ curl -H "Authorization: Bearer cl_live_..." "https://api.clousd.com/v1/devices/d
 | `GET`/`POST /schedules`, `POST /schedules/{id}/toggle`, `/delete` | tasks at a time on days of the week |
 | `GET`/`POST /credentials`, `POST /credentials/{id}/fields`, `DELETE …` | saved logins; values are never returned |
 | `GET`/`POST /webhooks`, `…/{id}/rotate`, `/toggle`, `/test`, `GET …/deliveries` | events to your server, signed with your secret |
-| `GET /devices`, `GET /devices/{name}`, `POST /devices`, `start`/`stop`/`restart`/`reset` | phones of the key and their lifecycle; `reset` wipes apps and data |
+| `GET /android`, `GET /devices`, `GET /devices/{name}`, `POST /devices {android}`, `start`/`stop`/`restart`/`reset` | phones of the key and their lifecycle; a phone is created by Android version; `reset` wipes apps and data |
 | `DELETE /devices/{name}` (`?forever=1`), `GET /trash`, `POST /trash/{name}/restore` | delete moves the phone to Trash for 14 days (stopped, not billed, restorable); `forever=1` wipes it at once |
 | `GET /devices/{name}/observe`, `POST /devices/{name}/act`, `/screenshot`, `/screenrecord` | the screen, step by step |
 | `GET`/`POST /devices/{name}/network`, `GET`/`POST /proxies` | the phone's network exit |
@@ -120,6 +120,13 @@ Full description: [`openapi.yaml`](openapi.yaml); reference: [clousd.com/docs/re
 | [`docs/agent-loop.md`](docs/agent-loop.md) | driving a phone yourself: the observe → act → verify loop |
 | [`server.json`](server.json), [`smithery.yaml`](smithery.yaml) | registry metadata |
 
+## Upgrading from 1.4
+
+1.5 creates phones by Android version only. `POST /v1/devices {android: "14"}` (versions: `GET /v1/android`); the phone
+model is picked by the service. `GET /v1/models` answers `410`, and devices no longer carry a `model` field. A phone
+not renamed is called `Phone #N`. An old body with `profile` still works and keeps only that model's Android version.
+Python: `c.create_device(android="14")`, `c.android_versions()`; `c.models()` is deprecated.
+
 ## Upgrading from 1.2
 
 1.3 adds the Library: `GET /v1/media` lists the account's files (photos, videos, documents, apks) with ids and folders,
@@ -131,7 +138,7 @@ Creating a device no longer takes `plan`: phones run pay as you go, a plan's min
 ## Upgrading from 1.1
 
 1.2 removes saved device states. `/v1/devices/{name}/snapshots`, `/profiles` and `/worlds` answer `410`; to start from a
-clean phone call `POST /v1/devices/{name}/reset` (apps and data are wiped, the model and Android stay the same). Python:
+clean phone call `POST /v1/devices/{name}/reset` (apps and data are wiped, the Android version stays the same). Python:
 `device.reset()` replaces `snapshots()`, `save_snapshot()`, `restore()` and `clone()`.
 
 ## Upgrading from 0.3
@@ -153,7 +160,6 @@ python -m unittest discover -s python/tests     # offline: a fake server and a s
 
 - Phones for AI agents: https://clousd.com/agents/
 - Docs: https://clousd.com/docs/ · API reference: https://clousd.com/docs/reference/
-- Device catalog (150+ real models, Android 12 to 17): https://clousd.com/devices/
 - Pricing: https://clousd.com/pricing/
 - Packages: https://pypi.org/project/clousd/ · https://pypi.org/project/clousd-mcp/
 - MCP registry entry: `io.github.Clousd-Android/clousd-mcp` · hosted endpoint: `https://api.clousd.com/mcp`

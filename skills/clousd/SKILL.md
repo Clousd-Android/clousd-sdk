@@ -26,10 +26,10 @@ in the URL. Never print the key back in full, never store it in a project file.
 
 1. **Account first.** `account` before starting phones or long work: tell the user every line of `warnings` in plain
    words, with the `top_up` link.
-2. **Look at the phones.** `devices` (op=list): every phone has a `label` (the name the user sees, e.g. "Pixel 7 #3")
+2. **Look at the phones.** `devices` (op=list): every phone has a `label` (the name the user sees, e.g. "Phone #3")
    and a `number`; every tool accepts the name, the label or the number. A stopped phone starts with `devices op=start`
-   (one to three minutes). `devices op=reset` returns a phone to a fresh state (apps and data wiped, same model and
-   Android) - ask the user first. `devices op=delete` moves a phone to Trash for 14 days (stopped, not billed, data kept;
+   (one to three minutes). `devices op=reset` returns a phone to a fresh state (apps and data wiped, same Android
+   version) - ask the user first. `devices op=delete` moves a phone to Trash for 14 days (stopped, not billed, data kept;
    `op=trash` lists it, `op=restore` brings it back stopped); `forever=true` wipes it at once and cannot be undone - only
    when the user says so explicitly.
 3. **Give the phone the goal, not the taps.** `run task="..." devices=...` - Clousd's agent works the screen and
@@ -51,7 +51,7 @@ in the URL. Never print the key back in full, never store it in a project file.
 
 ## Typical requests
 
-- "What Android version is on my Pixel?" → `run task="Open Settings and tell me the Android version" devices="Pixel 7 #3"`
+- "What Android version is on my phone?" → `run task="Open Settings and tell me the Android version" devices="Phone #3"`
 - "Check that our app opens and the login screen shows on all test phones" →
   `run task="Open the app com.example.shop and tell me what the first screen shows" devices="1,2,3,4"`
 - "Sign in with the work account and open the profile" →

@@ -1,6 +1,6 @@
 # clousd
 
-Python client for [CLOUSD](https://clousd.com/agents/): real Android phones in the cloud, built as specific real models,
+Python client for [CLOUSD](https://clousd.com/agents/): real Android phones in the cloud on the Android version you pick,
 for scripts and AI agents. Give a phone a task in plain words and get the answer, or drive the screen yourself.
 
 ```bash
