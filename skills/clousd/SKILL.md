@@ -48,6 +48,11 @@ in the URL. Never print the key back in full, never store it in a project file.
 9. **Drive the screen yourself only when needed.** `observe` (screenshot with numbered elements) and `act` (tap an
    element number, type, swipe, open an app or a link) - for checking a screen, or for a step the user wants exactly.
    `act` also reads without touching: notifications, clipboard, app_info, crashes, health.
+10. **Apps are the user's own APKs.** `apps` lists the APKs the user uploaded; `apps op=upload path=app.apk` adds one
+   (up to 300 MB, checked first - a real Android app with 64-bit ARM code, no root or system tools) and returns its id;
+   `apps op=install app=<id> devices=...` installs it on running phones. There is no catalog of other people's apps:
+   apps from Google Play are installed in the Play Store on the phone. To have an app there before a task, pass its id
+   in `run files=<id>`.
 
 ## Typical requests
 
@@ -56,6 +61,8 @@ in the URL. Never print the key back in full, never store it in a project file.
   `run task="Open the app com.example.shop and tell me what the first screen shows" devices="1,2,3,4"`
 - "Sign in with the work account and open the profile" →
   `credentials` (find `com.example.app/work`), then `run task="Sign in and open the profile" devices=... credentials="com.example.app/work"`
+- "Install our build on all test phones" → `apps op=upload path=./app-release.apk`, then
+  `apps op=install app=<id> devices="1,2,3,4"`
 - "Every weekday at 9 check the order page" → `schedules op=add task="..." devices=... at=09:00 days=1,2,3,4,5 tz=Europe/Berlin`
 
 ## Limits

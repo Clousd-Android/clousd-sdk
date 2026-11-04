@@ -49,12 +49,18 @@ class Clousd:
 
     # -- transport ---------------------------------------------------------------------------------------------
     def request(self, method: str, path: str, json: Any = None, params: Any = None,
-                timeout: Optional[float] = None, raw: bool = False, headers: Optional[Dict[str, str]] = None) -> Any:
-        """One API call. Retries politely on 429 (60 requests a minute per key) and on a dropped connection."""
+                timeout: Optional[float] = None, raw: bool = False, headers: Optional[Dict[str, str]] = None,
+                files: Any = None) -> Any:
+        """One API call. Retries politely on 429 (60 requests a minute per key) and on a dropped connection.
+        `files` - a multipart upload, {"file": (name, open file)}; the file is rewound before every attempt."""
         url = self.base_url + "/" + path.lstrip("/")
         for attempt in range(5):
+            for f in (files or {}).values():
+                fo = f[1] if isinstance(f, tuple) else f
+                if hasattr(fo, "seek"):
+                    fo.seek(0)
             try:
-                r = self._http.request(method, url, json=json, params=params, timeout=timeout or self.timeout, headers=headers)
+                r = self._http.request(method, url, json=json, params=params, timeout=timeout or self.timeout, headers=headers, files=files)
             except requests.ConnectionError:
                 if attempt == 4:
                     raise
@@ -340,18 +346,44 @@ class Clousd:
         return self.request("GET", "media", params={"kind": kind} if kind else None).get("media", [])
 
     def upload_media(self, data: Any, name: str = "", folder: Optional[int] = None) -> Dict[str, Any]:
-        """Add a file to the Library (up to 50 MB over the API): `data` is bytes or a file path; `name` keeps the extension -
-        photo (.jpg .png .webp .heic), video (.mp4 .mov), document (.pdf .txt .csv .md .json .docx .xlsx .zip) or .apk."""
+        """Add a file to the Library: `data` is a file path (sent as a file - photo 25 MB, video 200 MB, document 50 MB,
+        apk 300 MB) or bytes (up to 50 MB); `name` keeps the extension - photo (.jpg .png .webp .heic), video (.mp4 .mov),
+        document (.pdf .txt .csv .md .json .docx .xlsx .zip) or .apk."""
         import base64
         import os
         if isinstance(data, (str, os.PathLike)):
             name = name or os.path.basename(str(data))
             with open(data, "rb") as f:
-                data = f.read()
+                return self._upload_form("media", name, f, {"folder": str(int(folder))} if folder else {}).get("media", {})
         body: Dict[str, Any] = {"name": name, "data_b64": base64.b64encode(data).decode()}
         if folder:
             body["folder"] = int(folder)
         return self.request("POST", "media", json=body, timeout=180).get("media", {})
+
+    def _upload_form(self, path: str, name: str, f: Any, form: Dict[str, str]) -> Dict[str, Any]:
+        files = {k: (None, v) for k, v in form.items()}
+        files["file"] = (name, f)
+        return self.request("POST", path, files=files, timeout=1800)
+
+    # -- your apps (APKs you uploaded; there is no catalog of other people's apps) ------------------------------
+    def apps(self) -> List[Dict[str, Any]]:
+        """Your apps: the APKs you uploaded - [{id, name, size, package, version, created}]."""
+        return self.request("GET", "apps").get("apps", [])
+
+    def upload_app(self, path: str) -> Dict[str, Any]:
+        """Upload your APK once (up to 300 MB) and get its id; install it later with install_app(). The file is checked
+        first - a real Android app, 64-bit ARM code, not a root or system tool - and refused with the reason otherwise."""
+        import os
+        with open(path, "rb") as f:
+            return self.request("POST", "apps", files={"file": (os.path.basename(str(path)), f)}, timeout=1800).get("app", {})
+
+    def install_app(self, app_id: int, devices: List[Any]) -> Dict[str, Any]:
+        """Install one of your apps on running phones; per phone {ok, job} (follow with job()) or {ok: False, message}."""
+        return self.request("POST", f"apps/{int(app_id)}/install", json={"devices": _names(devices)}, timeout=120).get("installs", {})
+
+    def delete_app(self, app_id: int) -> None:
+        """Delete the APK from your storage (phones keep what is installed)."""
+        self.request("DELETE", f"apps/{int(app_id)}")
 
     def send_media(self, ids: List[int], devices: List[Any]) -> Dict[str, Any]:
         """Copy library files into the phones' galleries, as if taken by that phone (EXIF of the model, local time, place)."""

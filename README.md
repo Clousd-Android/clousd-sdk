@@ -120,6 +120,17 @@ Full description: [`openapi.yaml`](openapi.yaml); reference: [clousd.com/docs/re
 | [`docs/agent-loop.md`](docs/agent-loop.md) | driving a phone yourself: the observe → act → verify loop |
 | [`server.json`](server.json), [`smithery.yaml`](smithery.yaml) | registry metadata |
 
+## Upgrading from 1.5
+
+1.6 adds your apps. An app is an APK you upload once and install by id on any of your phones; there is no catalog of
+other people's apps (Google Play apps are installed in the Play Store on the phone). `GET /v1/apps` lists your APKs
+(id, name, size, package, version), `POST /v1/apps` uploads one as a file up to 300 MB, `POST /v1/apps/{id}/install
+{devices}` installs it, `DELETE /v1/apps/{id}` removes it from storage. `POST /v1/media` also takes a multipart file now
+(photo 25 MB, video 200 MB, document 50 MB, apk 300 MB). Every APK is checked on upload and before each install - a real
+Android app, 64-bit ARM native code when it has any, not a root or system-modification tool - and refused with
+`422 apk_rejected` and the reason otherwise. SDK: `c.apps()`, `c.upload_app(path)`, `c.install_app(id, devices)`,
+`c.delete_app(id)`; `c.upload_media(path)` sends the file as a file. MCP: the `apps` tool.
+
 ## Upgrading from 1.4
 
 1.5 creates phones by Android version only. `POST /v1/devices {android: "14"}` (versions: `GET /v1/android`); the phone

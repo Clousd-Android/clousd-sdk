@@ -58,7 +58,8 @@ mcp = _Server("clousd", instructions="Real Android phones in the cloud. Start wi
               "several phones put them all in one run (they work in parallel) - never loop over phones. Never ask the user "
               "for passwords: pass a saved login from credentials to run; its values are typed without anyone seeing them. "
               "Use observe and act only when you want to drive the screen yourself step by step. Repeating work goes to "
-              "schedules.")
+              "schedules. Apps: the user's own APKs live in apps (upload once, install by id on any phone); there is no "
+              "catalog of other people's apps - Google Play apps are installed from the Play Store on the phone.")
 _clients: Dict[str, Clousd] = {}   # API key → client (one per key; the remote server serves many keys)
 _key: contextvars.ContextVar = contextvars.ContextVar("clousd_key", default="")
 _scale: Dict[str, float] = {}      # device → device pixels per screenshot pixel
@@ -356,7 +357,7 @@ def run(task: Annotated[str, Field(description="the goal in plain words, e.g. \"
 
 @mcp.tool(annotations=ToolAnnotations(title="Library", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
 def library(op: Annotated[str, Field(description="list (default) | upload | send")] = "list",
-            path: Annotated[str, Field(description="upload: a local file to add - photo (.jpg .png .webp .heic), video (.mp4 .mov), document (.pdf .txt .csv .md .json .docx .xlsx .zip) or .apk, up to 50 MB")] = "",
+            path: Annotated[str, Field(description="upload: a local file to add - photo (.jpg .png .webp .heic), video (.mp4 .mov), document (.pdf .txt .csv .md .json .docx .xlsx .zip) or .apk; photo 25 MB, video 200 MB, document 50 MB, apk 300 MB")] = "",
             kind: Annotated[str, Field(description="list: only this kind - image | video | doc | apk (empty = all)")] = "",
             ids: Annotated[str, Field(description="send: library ids, comma-separated")] = "",
             devices: Annotated[str, Field(description="send: devices to copy the files to (names, labels or numbers)")] = "",
@@ -380,6 +381,40 @@ def library(op: Annotated[str, Field(description="list (default) | upload | send
                 return {"error": "send: ids and devices are required"}
             return c.send_media(fids, names)
         return {"files": c.media(kind)}
+    except (ClousdError, ValueError, OSError) as e:
+        return {"error": _err(e)}
+
+
+@mcp.tool(annotations=ToolAnnotations(title="Apps", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False))
+def apps(op: Annotated[str, Field(description="list (default) | upload | install | delete")] = "list",
+         path: Annotated[str, Field(description="upload: a local .apk file, up to 300 MB")] = "",
+         app: Annotated[int, Field(description="install / delete: the app id from op=list or op=upload")] = 0,
+         devices: Annotated[str, Field(description="install: phones to install on (names, labels or numbers); they must be running")] = "",
+         ctx: Optional[Context] = None) -> Dict[str, Any]:
+    """The user's own apps on Clousd: APKs they uploaded, kept in their private storage. Upload an APK once (op=upload),
+    then install it by id on any of their phones (op=install), as often as needed. Clousd has no catalog of other people's
+    apps - for apps from Google Play, open the Play Store on the phone. Every APK is checked on upload (a real Android app,
+    64-bit ARM code, no root or system tools) and refused with the reason otherwise. To have an app on the phone before a
+    task, pass its id in run(files=...)."""
+    _use(ctx)
+    try:
+        c = client()
+        if op == "upload":
+            if not path:
+                return {"error": "path: a local .apk file"}
+            a = c.upload_app(path)
+            return {"ok": True, "app": a, "hint": "install it with apps(op=install, app=<id>, devices=...)"}
+        if op == "install":
+            names = _devs(devices)
+            if not app or not names:
+                return {"error": "install: app (id) and devices are required"}
+            return {"installs": c.install_app(app, names), "hint": "each install is a job on its phone - it takes a minute"}
+        if op == "delete":
+            if not app:
+                return {"error": "delete: app (id) is required"}
+            c.delete_app(app)
+            return {"ok": True}
+        return {"apps": c.apps()}
     except (ClousdError, ValueError, OSError) as e:
         return {"error": _err(e)}
 

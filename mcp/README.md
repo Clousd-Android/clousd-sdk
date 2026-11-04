@@ -23,6 +23,7 @@ Docs: [clousd.com/docs/mcp](https://clousd.com/docs/mcp/). Source: [github.com/C
 | `observe` | A fresh screenshot with a number on every element, the app in front, the elements as text |
 | `act` | Tap an element number or a point, long press, swipe, scroll, type in any language, keys, open apps and links, intents, settings pages; read notifications, clipboard, app info, crashes, health |
 | `credentials` | Saved logins: package, name and which fields are set - never the values. Pass one to `run` and it is typed without anyone seeing it |
+| `apps` | The user's own apps: APKs they uploaded (no catalog of other people's apps). List, upload a local .apk once (up to 300 MB, checked first), install it by id on running phones, delete |
 | `library` | The user's files on Clousd (photos, videos, documents, apks): list, upload a local file once, send to phones. Pass ids to `run` as `files` - they are placed on the phone before the first step |
 | `schedules` | Tasks that run by themselves at a time on chosen days: list, add, pause, delete |
 

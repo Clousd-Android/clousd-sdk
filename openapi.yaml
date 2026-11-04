@@ -447,11 +447,51 @@ paths:
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: object } } } }
     post:
-      summary: Upload a file - {name, data_b64, folder}, up to 50 MB (photo, video, document or apk by the name's extension)
-      description: Pass the id in POST /runs files to put it on the phone for a task, or copy it to phones at once with /media/send.
-      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name, data_b64], properties: { name: { type: string, example: beach.jpg }, data_b64: { type: string }, folder: { type: integer } } } } } }
+      summary: Upload a file - multipart file= (photo 25 MB, video 200 MB, document 50 MB, apk 300 MB) or JSON {name, data_b64, folder} up to 50 MB
+      description: Pass the id in POST /runs files to put it on the phone for a task, or copy it to phones at once with /media/send. Every APK is checked on upload (a real Android app, 64-bit ARM code, no root or system-modification tools) and answers 422 apk_rejected with the reason otherwise.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data: { schema: { type: object, required: [file], properties: { file: { type: string, format: binary }, folder: { type: integer } } } }
+          application/json: { schema: { type: object, required: [name, data_b64], properties: { name: { type: string, example: beach.jpg }, data_b64: { type: string }, folder: { type: integer } } } }
       responses:
         "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /apps:
+    get:
+      summary: Your apps - the APKs you uploaded (id, name, size, package, version); there is no catalog of other people's apps
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { apps: { type: array, items: { $ref: "#/components/schemas/App" } } } } } } }
+    post:
+      summary: Upload your APK once - multipart file=<app.apk> up to 300 MB (or JSON {name, data_b64} up to 50 MB); then install it by id on any of your phones
+      description: The file is checked before it is stored - a real Android app with a manifest, native code for arm64-v8a when it has any, not a root or system-modification tool, not a system package or system user id. A failed check answers 422 apk_rejected with the reason. Split bundles (.apks, .xapk) are not installed - upload the base .apk.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data: { schema: { type: object, required: [file], properties: { file: { type: string, format: binary } } } }
+          application/json: { schema: { type: object, required: [name, data_b64], properties: { name: { type: string, example: my-app.apk }, data_b64: { type: string } } } }
+      responses:
+        "200": { description: Stored, content: { application/json: { schema: { type: object, properties: { app: { $ref: "#/components/schemas/App" } } } } } }
+        "402": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /apps/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+    get:
+      summary: One of your apps
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { app: { $ref: "#/components/schemas/App" } } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Delete the APK from your storage (phones keep what is installed)
+      responses:
+        "200": { description: Deleted, content: { application/json: { schema: { type: object } } } }
+  /apps/{id}/install:
+    parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+    post:
+      summary: Install your app on running phones - {devices:[…]}; each install runs as a job on its phone
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [devices], properties: { devices: { type: array, items: { type: string }, example: ["Phone #1", "Phone #2"] } } } } } }
+      responses:
+        "200": { description: Started, content: { application/json: { schema: { type: object, properties: { installs: { type: object, description: "per phone - {ok, job} or {ok:false, message}" } } } } } }
+        "404": { $ref: "#/components/responses/Error" }
   /media/folders:
     post:
       summary: Create a Library folder - {name}
@@ -505,6 +545,15 @@ components:
       description: Started
       content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, job: { $ref: "#/components/schemas/Job" } } } } }
   schemas:
+    App:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string, example: my-app.apk }
+        size: { type: string, example: 14.0 MB }
+        package: { type: string, example: com.example.app }
+        version: { type: string, example: 2.4.1 }
+        created: { type: string, format: date-time }
     Error:
       type: object
       properties:
