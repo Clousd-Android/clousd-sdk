@@ -1,11 +1,11 @@
 ---
 name: clousd
-description: Drive real Android cloud phones on Clousd - check the account, list and start phones, give one or many phones a task in plain words and follow it to the answer, use saved logins without seeing passwords, schedule repeating tasks, or drive the screen step by step. Use when the user mentions Clousd, cloud phones, testing or automating Android apps on remote phones, or an agent that needs a phone.
+description: Drive cloud Android phones on Clousd - check the account, list and start phones, give one or many phones a task in plain words and follow it to the answer, use saved logins without seeing passwords, schedule repeating tasks, or drive the screen step by step. Use when the user mentions Clousd, cloud phones, testing or automating Android apps on remote phones, or an agent that needs a phone.
 ---
 
-# Clousd: real Android phones for agents
+# Clousd: cloud Android phones for agents
 
-Clousd phones are real Android devices in the cloud (Google Play inside, their own network exit and time zone). You reach
+Clousd phones are Android devices in the cloud, each with its own network exit and time zone. You reach
 them through the Clousd MCP server (tools `account`, `devices`, `run`, `run_status`, `answer`, `observe`, `act`,
 `credentials`, `schedules`) or the REST API `https://api.clousd.com/v1` with `Authorization: Bearer cl_live_...`.
 

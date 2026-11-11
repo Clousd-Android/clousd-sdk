@@ -1,4 +1,4 @@
-# Clousd: real Android phones in the cloud, for AI agents
+# Clousd: cloud Android phones for AI agents
 
 [![tests](https://github.com/Clousd-Android/clousd-sdk/actions/workflows/tests.yml/badge.svg)](https://github.com/Clousd-Android/clousd-sdk/actions/workflows/tests.yml)
 [![PyPI clousd](https://img.shields.io/pypi/v/clousd?label=clousd)](https://pypi.org/project/clousd/)
@@ -8,10 +8,9 @@
 
 Every agent framework can tap a phone. Almost none has a phone worth tapping.
 
-**Clousd is the phone.** Each device is a full Android system on the Android version you pick (12 to 17), with Google
-Play inside and its own network exit. Give it a task in plain words and Clousd's phone agent does
-the steps and answers; or drive the screen yourself, step by step. Apps see a phone, not an emulator, so your agent
-sees the screens a person sees.
+**Clousd is the phone.** Each device is a full Android system in the cloud, on the Android version you pick (12 to 17),
+with its own network exit. Give it a task in plain words and Clousd's phone agent does the steps and answers; or drive
+the screen yourself, step by step.
 
 This repository is the public side of it: the OpenAPI description, the Python client, the MCP server and the skill for
 coding agents.
@@ -24,7 +23,7 @@ replay of every step, and JSON in your schema when you ask for it. One call give
 Saved logins are typed on the phone without your agent or the model seeing them.
 
 **Drive it yourself.** `observe` returns a fresh screenshot with a number on every element; `act` taps an element, types,
-swipes, opens apps and links, and waits until the screen settles. Snapshots reset a phone to a saved state in seconds.
+swipes, opens apps and links, and waits until the screen settles. Reset returns a phone to a fresh state.
 
 ## Quick start
 

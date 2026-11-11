@@ -6,7 +6,7 @@ info:
   title: CLOUSD API
   version: "1.0"
   description: >
-    Cloud Android phones modelled on real devices. Every call needs `Authorization: Bearer cl_live_…`
+    Cloud Android phones. Every call needs `Authorization: Bearer cl_live_…`
     (dashboard → Settings → Connections → API keys; scope read or control) - or an OAuth access token for apps that
     connect with OAuth 2.1 (metadata: /.well-known/oauth-protected-resource). Keys go only in the Authorization header.
     A task in plain words is a run (POST /runs): Clousd's agent does the steps on the phone and answers. Limits: 120 requests a minute per key and device for

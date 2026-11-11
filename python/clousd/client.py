@@ -94,7 +94,7 @@ class Clousd:
         return Device(self, name)
 
     def find(self, label: str) -> "Device":
-        """A device by the name people see in the dashboard ("Anna IG", "Pixel 7 #3", case-insensitive), its number or
+        """A device by the name people see in the dashboard ("Anna IG", "Phone #3", case-insensitive), its number or
         its API name. Raises ClousdError 404 when nothing matches."""
         want = str(label).strip().lower().lstrip("#")
         for d in self.devices():

@@ -1,8 +1,7 @@
-# clousd-mcp: real Android phones for your AI agent
+# clousd-mcp: cloud Android phones for your AI agent
 
-**Clousd MCP server** gives any MCP-capable agent real Android phones in the cloud. Each device is built as a specific
-handset (Pixel, Galaxy, Xiaomi, Motorola, OnePlus and 150+ more, Android 12 to 17) with Google Play inside and its own
-network exit, so apps behave the way they do on the phone in a user's pocket.
+**Clousd MCP server** gives any MCP-capable agent Android phones in the cloud. Each device is a full Android system on
+the Android version you pick (12 to 17) with its own network exit.
 
 Your agent does not have to tap every button itself. It gives a phone the goal in plain words - "open the app, sign in
 with the saved work login and tell me what the order page shows" - and Clousd's own phone agent works the screen and
@@ -97,7 +96,7 @@ run_status run=r_8f2c wait_seconds=40           -> completed; Pixel 7 #1: "3 ord
 
 1.0 gives phones goals instead of scripts: `run` / `run_status` / `answer` replace `fleet` and `recipe`; saved logins
 (`credentials`) replace `resources` accounts; reading the phone moved into `act`; `network`, `snapshots` and `inspect`
-are no longer MCP tools (the REST API and the Python client still have proxies, snapshots and device reads). Keys in
+are no longer MCP tools (the REST API and the Python client still have proxies and device reads). Keys in
 the URL (`?api_key=`, `?config=`) are no longer accepted - send the `Authorization` header or connect with OAuth.
 
 mcp-name: io.github.Clousd-Android/clousd-mcp

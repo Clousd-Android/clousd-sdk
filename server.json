@@ -1,13 +1,13 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "io.github.Clousd-Android/clousd-mcp",
-  "description": "Real Android phones in the cloud for AI agents: give phones a task in plain words and get the answer",
+  "description": "Cloud Android phones for AI agents: give phones a task in plain words and get the answer",
   "repository": {
     "url": "https://github.com/Clousd-Android/clousd-sdk",
     "source": "github"
   },
   "websiteUrl": "https://clousd.com/agents/",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "remotes": [
     {
       "type": "streamable-http",
@@ -26,7 +26,7 @@
     {
       "registryType": "pypi",
       "identifier": "clousd-mcp",
-      "version": "1.6.0",
+      "version": "1.6.1",
       "transport": {
         "type": "stdio"
       },

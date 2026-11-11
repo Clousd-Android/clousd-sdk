@@ -1,6 +1,6 @@
 # clousd
 
-Python client for [CLOUSD](https://clousd.com/agents/): real Android phones in the cloud on the Android version you pick,
+Python client for [CLOUSD](https://clousd.com/agents/): Android phones in the cloud on the Android version you pick,
 for scripts and AI agents. Give a phone a task in plain words and get the answer, or drive the screen yourself.
 
 ```bash
@@ -85,7 +85,7 @@ phone.act("tap", seq=obs["seq"], x=540, y=1200, settle=True)
 | | | `c.trash()`, `c.restore(device)` |
 | `installed()`, `notifications()`, `clipboard_get()` | `open_app(pkg)`, `close_app(pkg)`, `open_url(url)`, `intent(...)`, `settings("wifi")` | `c.job(id).wait()` |
 | `app_info(pkg)`, `crashes(pkg)`, `health()`, `screenrecord(seconds)` | `act(op, settle, seq, ...)`, `clipboard_set(text)` | |
-| `c.devices()`, `c.find("Pixel 7 #3")`, `c.balance()` | `device.rename(...)`, `c.create_device(...)` | `device.network()`, `c.proxies()`, `c.bind_proxy(id, phones)` |
+| `c.devices()`, `c.find("Phone #3")`, `c.balance()` | `device.rename(...)`, `c.create_device(...)` | `device.network()`, `c.proxies()`, `c.bind_proxy(id, phones)` |
 
 Coordinates are device pixels (`size()` gives the screen). Long device operations return a `Job`; they wait by default,
 pass `wait=False` to poll yourself. Errors raise `ClousdError` with the HTTP status, a short code and a message. The API

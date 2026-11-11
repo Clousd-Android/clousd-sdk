@@ -1,4 +1,4 @@
-"""MCP server for CLOUSD cloud phones: gives any MCP-capable agent real Android phones in the cloud.
+"""MCP server for CLOUSD cloud phones: gives any MCP-capable agent Android phones in the cloud.
 
 Nine tools (a few clear tools are easier for a model to choose from than dozens of small ones):
   account     - the plan, phones, money and warnings to tell the user
@@ -52,7 +52,7 @@ def shot_width() -> int:
     return max(240, min(int(SHOT_WIDTH), 1080))
 
 
-mcp = _Server("clousd", instructions="Real Android phones in the cloud. Start with account (tell the user its warnings with "
+mcp = _Server("clousd", instructions="Cloud Android phones. Start with account (tell the user its warnings with "
               "the link) and devices. To get something done on a phone, give it the goal in plain words with run - Clousd's "
               "agent works the screen and answers; follow it with run_status and reply to its questions with answer. For "
               "several phones put them all in one run (they work in parallel) - never loop over phones. Never ask the user "
@@ -65,7 +65,7 @@ _key: contextvars.ContextVar = contextvars.ContextVar("clousd_key", default="")
 _scale: Dict[str, float] = {}      # device → device pixels per screenshot pixel
 _els: Dict[str, Dict[str, Any]] = {}   # key+device → {seq, pts:[(cx, cy, label)]} of the last observe
 
-Device_ = Annotated[str, Field(description="Device from devices: its name, its label from the dashboard (e.g. \"Pixel 7 #3\") or its number")]
+Device_ = Annotated[str, Field(description="Device from devices: its name, its label from the dashboard (e.g. \"Phone #3\") or its number")]
 
 
 def _use(ctx: Optional[Context]) -> None:
@@ -106,7 +106,7 @@ _names: Dict[str, Any] = {}   # key → (time, {name}, {label / number → name}
 
 
 def _resolve(device: str) -> str:
-    """A device by its API name, its name in the dashboard ("Pixel 7 #3", case-insensitive) or its number ("3", "#3").
+    """A device by its API name, its name in the dashboard ("Phone #3", case-insensitive) or its number ("3", "#3").
     Unknown values pass through and the API answers 404."""
     d = (device or "").strip()
     if not d:

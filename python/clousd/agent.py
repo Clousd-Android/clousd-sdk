@@ -32,7 +32,7 @@ import requests
 
 from .client import ClousdError, Device
 
-SYSTEM = """You operate a real Android phone to complete the user's task.
+SYSTEM = """You operate an Android phone to complete the user's task.
 Every turn you get the current screen: a screenshot with a number on each element, and the list of those elements
 as lines `[n] label (class) flags`. Act with exactly ONE tool call per turn.
 

@@ -1,4 +1,4 @@
-# How an AI agent drives a real Android phone
+# How an AI agent drives an Android phone
 
 Notes from running agents on Clousd phones: what the loop looks like, where it breaks, and what fixed it. The API
 calls below are the public ones in [`openapi.yaml`](../openapi.yaml); the Python names are from the
@@ -103,13 +103,12 @@ hits `429` within a minute. Observe once per step, use `settle` instead of polli
 **Checking the result with another screenshot.** `wait_text("Added", timeout=30)` is cheaper and more reliable than
 screenshot-compare-screenshot: it polls the UI tree on the server and returns as soon as the text appears.
 
-## Why the phone model matters
+## What the phone is
 
-Apps read the device they run on: build fingerprint, hardware properties, sensors, GPU, codecs, installed Google
-services, network type and the country of the IP. A phone that reports an emulator, or a model that does not exist,
-or a datacenter IP with a mobile SIM, gets the "unusual activity" path: captchas, verification loops, features that
-never load. Clousd phones are built as specific models from snapshots of the real handsets, and the network, SIM,
-time zone and locale follow the exit the phone uses. The agent sees the same screens a person on that phone would.
+A Clousd phone is a full Android system in the cloud with its own network exit; the time zone and locale follow the
+country of that exit, so the agent sees the screens a person in that country would. These are virtual devices, not
+physical handsets: apps that verify the device with Google's device checks may not pass them, and no device
+certification is claimed.
 
 ## Where the logs are
 
