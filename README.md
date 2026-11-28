@@ -5,6 +5,7 @@
 [![PyPI clousd-mcp](https://img.shields.io/pypi/v/clousd-mcp?label=clousd-mcp)](https://pypi.org/project/clousd-mcp/)
 [![MCP registry](https://img.shields.io/badge/MCP%20registry-io.github.Clousd--Android%2Fclousd--mcp-6366f1)](https://registry.modelcontextprotocol.io)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Clousd-Android/clousd-sdk MCP server](https://glama.ai/mcp/servers/Clousd-Android/clousd-sdk/badges/score.svg)](https://glama.ai/mcp/servers/Clousd-Android/clousd-sdk)
 
 Every agent framework can tap a phone. Almost none has a phone worth tapping.
 
