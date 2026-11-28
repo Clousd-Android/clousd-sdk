@@ -1,0 +1,43 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.Clousd-Android/clousd-mcp",
+  "description": "Cloud Android phones for AI agents: give phones a task in plain words and get the answer",
+  "repository": {
+    "url": "https://github.com/Clousd-Android/clousd-sdk",
+    "source": "github"
+  },
+  "websiteUrl": "https://clousd.com/agents/",
+  "version": "1.6.4",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://api.clousd.com/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer cl_live_... (Clousd API key; apps with connectors sign in with OAuth instead)",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "clousd-mcp",
+      "version": "1.6.4",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "CLOUSD_API_KEY",
+          "description": "Clousd API key (cl_live_...) from the dashboard, Settings -> Connections -> API keys",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}

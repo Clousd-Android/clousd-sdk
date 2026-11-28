@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clousd-mcp"
+version = "1.6.4"
+description = "MCP server: give an AI agent an Android phone in the cloud"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = ["mcp>=1.10.0", "clousd>=1.6.0", "pillow>=9", "uvicorn>=0.27"]
+keywords = ["mcp", "android", "cloud phone", "ai agents", "mobile automation"]
+
+[project.scripts]
+clousd-mcp = "clousd_mcp.server:main"
+
+[project.urls]
+Homepage = "https://clousd.com/agents/"
+
+[tool.setuptools]
+packages = ["clousd_mcp"]

@@ -1,0 +1,659 @@
+openapi: 3.1.0
+# Public API v1: devices, runs, files, apps. SDKs and generated clients follow this file.
+info:
+  title: CLOUSD API
+  version: "1.0"
+  description: >
+    Cloud Android phones. Every call needs `Authorization: Bearer cl_live_…`
+    (dashboard → Settings → Connections → API keys; scope read or control) - or an OAuth access token for apps that
+    connect with OAuth 2.1 (metadata: /.well-known/oauth-protected-resource). Keys go only in the Authorization header.
+    A task in plain words is a run (POST /runs): Clousd's agent does the steps on the phone and answers. Limits: 120 requests a minute per key and device for
+    /devices/{name}/… routes (600 a minute per key across devices), 60 a minute per key for the rest (429 + Retry-After). Long operations answer 202 with a
+    job; poll /jobs/{id}. Errors are JSON: {"error": "...", "message": "..."}.
+servers:
+  - url: https://api.clousd.com/v1
+security:
+  - bearer: []
+paths:
+  /runs:
+    post:
+      summary: Give one phone or several a task in plain words
+      description: >-
+        Clousd's agent looks at the screen, acts and finishes with an answer. `devices` (up to 32) = one run per phone
+        under a parent run, all started at once. `credentials` - saved logins by package and name; their values are typed
+        on the phone and never reach the model or the API response. `options.output_schema` (JSON Schema) - the answer also
+        comes back as `structured_output`. `options.mode`: auto (default for the API) or ask (the run stops with a card
+        before risky steps; reply with POST /runs/{id}/answer). A phone does one run at a time; others wait in its queue.
+        Idempotency-Key: a retry with the same key and body returns the same run.
+      parameters: [{ name: Idempotency-Key, in: header, required: false, schema: { type: string, maxLength: 128 } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [task]
+              properties:
+                task: { type: string, description: the goal in plain words }
+                device: { type: string }
+                devices: { type: array, items: { type: string }, maxItems: 32 }
+                credentials: { type: array, items: { type: object, properties: { package: { type: string }, name: { type: string } } } }
+                files: { type: array, maxItems: 8, items: { type: integer }, description: "Library file ids (GET /media) placed on the phone before the first step: photos and videos in the gallery, documents in Downloads, apks installed; the run lists them with their paths" }
+                options:
+                  type: object
+                  properties:
+                    mode: { type: string, enum: [auto, ask] }
+                    max_steps: { type: integer, description: default 100 }
+                    timeout: { type: integer, description: seconds, default 1000 }
+                    output_schema: { type: object }
+                    reasoning: { type: boolean }
+                    vision: { type: boolean }
+                    recording: { type: boolean }
+                source: { type: string, description: a short label of where the run came from }
+            example: { task: "Open Settings and tell me the Android version", device: dev_04f2 }
+      responses:
+        "201": { description: Started, content: { application/json: { schema: { type: object, properties: { run: { $ref: "#/components/schemas/Run" }, runs: { type: array, items: { $ref: "#/components/schemas/Run" } } } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+    get:
+      summary: Runs of this key, newest first
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [queued, running, paused, completed, failed, cancelled] } }
+        - { name: device, in: query, schema: { type: string } }
+        - { name: since, in: query, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, schema: { type: integer, maximum: 200, default: 50 } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { runs: { type: array, items: { $ref: "#/components/schemas/Run" } } } } } } }
+  /runs/{id}:
+    get:
+      summary: One run - status, answer, structured_output, the card it waits on
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { run: { $ref: "#/components/schemas/Run" } } } } } }
+    delete:
+      summary: Delete a finished run with its steps and screenshots
+  /runs/{id}/events:
+    get:
+      summary: Live events as Server-Sent Events
+      description: >-
+        `id` is the event number (resume with ?since=N or Last-Event-ID), `event` one of status, step, plan, card, answer,
+        message, log, end; `data` is JSON. The stream ends after `end`. A comment line `: ping` comes every 15 s.
+      parameters: [{ name: since, in: query, schema: { type: integer } }]
+      responses:
+        "200": { description: text/event-stream }
+  /runs/{id}/trajectory:
+    get:
+      summary: Every step - tool, target, result, whether the screen was kept
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { run: { $ref: "#/components/schemas/Run" }, steps: { type: array, items: { type: object, properties: { n: { type: integer }, tool: { type: string }, target: { type: string }, result: { type: string }, ok: { type: boolean }, shot: { type: boolean }, ms: { type: integer } } } } } } } } }
+  /runs/{id}/steps/{n}.jpg:
+    get:
+      summary: The screen before step n
+      responses:
+        "200": { description: image/jpeg }
+  /runs/{id}/answer:
+    post:
+      summary: Answer the run's card - a question (answer) or a permission (allow / decline)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [card], properties: { card: { type: string }, answer: { type: string }, allow: { type: boolean }, decline: { type: boolean } } } } } }
+  /runs/{id}/message:
+    post:
+      summary: Tell the running agent something; it reads it before its next step
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [text], properties: { text: { type: string } } } } } }
+  /runs/{id}/cancel:
+    post:
+      summary: Stop the run
+  /schedules:
+    get:
+      summary: Schedules of this key
+    post:
+      summary: A task that runs by itself - daily, hourly or when you call it
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phones, task]
+              properties:
+                name: { type: string }
+                phones: { type: array, items: { type: string }, maxItems: 32 }
+                task: { type: string }
+                at: { type: string, example: "09:00", description: "HH:MM; with every=hour only the minutes count; not needed for trigger=api" }
+                every: { type: string, enum: [day, hour], default: day }
+                trigger: { type: string, enum: ["", api], description: "api = never by time, only POST /schedules/{id}/run" }
+                more: { type: array, maxItems: 12, description: "More times for the same task", items: { type: object, properties: { at: { type: string }, every: { type: string, enum: [day, hour] }, days: { type: array, items: { type: integer } } } } }
+                days: { type: array, items: { type: integer, minimum: 1, maximum: 7 }, description: "1 = Monday; empty = every day" }
+                tz: { type: string, example: Europe/Berlin }
+                credentials: { type: array, items: { type: object, properties: { package: { type: string }, name: { type: string } } } }
+                options: { type: object }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { type: object, properties: { schedule: { type: object } } } } } }
+  /schedules/{id}/run:
+    post:
+      summary: Start a schedule now - the trigger for trigger=api
+      responses:
+        "200": { description: Started, content: { application/json: { schema: { type: object, properties: { runs: { type: array, items: { type: string } } } } } } }
+  /schedules/{id}/toggle:
+    post:
+      summary: Pause or resume a schedule
+  /schedules/{id}/delete:
+    post:
+      summary: Delete a schedule
+  /credentials:
+    get:
+      summary: Saved logins - package, name and which fields are set; values are never returned
+      parameters: [{ name: package, in: query, schema: { type: string } }]
+    post:
+      summary: Save a login for an app
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [package, name, fields], properties: { package: { type: string }, name: { type: string }, fields: { type: object, description: "type → value; types: username, email, password, phone, totp (secret or otpauth:// link), token, backup", additionalProperties: { type: string } } } } } } }
+  /credentials/{id}/fields:
+    post:
+      summary: Set one field of a login
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [type, value], properties: { type: { type: string }, value: { type: string } } } } } }
+  /credentials/{id}/fields/{type}:
+    delete:
+      summary: Remove one field of a login
+  /credentials/{id}:
+    delete:
+      summary: Delete a login
+  /webhooks:
+    get:
+      summary: Webhooks of this key and the events you can subscribe to (run.completed, run.failed, run.cancelled, run.waiting, device.problem, device.resolved)
+    post:
+      summary: Subscribe an https URL
+      description: >-
+        Answers 201 with the webhook and its secret (shown once). Every delivery carries X-Clousd-Signature:
+        t=<unix time>,v1=<hex HMAC-SHA256(secret, "<t>.<body>")>; up to four attempts (at once, 30 s, 5 min, 30 min).
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [url], properties: { url: { type: string }, events: { type: array, items: { type: string } }, description: { type: string } } } } } }
+  /webhooks/{id}:
+    get:
+      summary: One webhook
+    delete:
+      summary: Delete it
+  /webhooks/{id}/rotate:
+    post:
+      summary: New secret (shown once)
+  /webhooks/{id}/toggle:
+    post:
+      summary: Pause or resume deliveries
+  /webhooks/{id}/test:
+    post:
+      summary: Send a test event now
+  /webhooks/{id}/deliveries:
+    get:
+      summary: Recent deliveries with status and response time
+  /android:
+    get:
+      summary: Android versions you can create devices on
+      description: Create a device with one of them - POST /devices {android}. The phone model is picked by the service.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { android: { type: array, items: { type: string }, example: ["12", "13", "14", "15", "16", "17"] }, note: { type: string } } } } } }
+  /devices:
+    get:
+      summary: Devices this key can see
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { devices: { type: array, items: { $ref: "#/components/schemas/Device" } } } } } } }
+    post:
+      summary: Create a device (charged to the account of the API key)
+      description: >
+        One device per call. Creating a phone is free; it runs pay as you go by the minute from the account balance
+        (a plan's minutes are used first); a paid network exit (mobile, residential, isp, datacenter) is metered per GB. Idempotency-Key (header, or
+        idempotency_key / name in the body) is required - a retry with the same key within 10 minutes returns the same
+        answer and is not charged twice. The device boots in one to three minutes: poll GET /devices/{name}.
+      parameters: [{ name: Idempotency-Key, in: header, required: false, schema: { type: string, maxLength: 120 } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [android]
+              properties:
+                android: { type: string, example: "14", description: "Android version from GET /android. The phone model is picked by the service" }
+                label: { type: string, maxLength: 40, description: 'the name shown in the dashboard; empty = "Phone #N"' }
+                network: { type: object, properties: { type: { type: string, enum: [off, byo, mobile, residential, isp, datacenter] }, country: { type: string, description: ISO-2 for paid exits }, url: { type: string, description: "socks5:// or http:// for byo" } } }
+                region: { type: string, description: where the device itself runs (ISO-2); default - the exit country }
+                burner: { type: boolean, description: disposable - stopping deletes it }
+                idempotency_key: { type: string }
+      responses:
+        "202": { description: Creating, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, name: { type: string }, ext_id: { type: string }, state: { type: string, const: starting }, poll: { type: string }, charged_cents: { type: integer }, android: { type: string } } } } } }
+        "400": { description: "bad_android (the answer lists the available versions) | bad_network | bad_request", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "402": { description: insufficient_funds - add funds in the dashboard, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: only account API keys can create devices }
+        "409": { description: limit (50 devices per account) | processing (same Idempotency-Key still running) }
+        "502": { description: the device service did not answer - nothing was charged }
+  /devices/{name}:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    get:
+      summary: One device
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { device: { $ref: "#/components/schemas/Device" } } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: "Delete the device: it moves to Trash for 14 days (not running, not billed) and can be restored; forever=1 deletes it with its data at once. On an account that has never paid, the device is always deleted at once."
+      parameters: [{ name: forever, in: query, required: false, schema: { type: string, enum: ["1"] } }]
+      responses:
+        "200": { description: "Moved to Trash", content: { application/json: { schema: { type: object, properties: { trashed: { type: boolean }, device: { type: string }, purge_at: { type: string, format: date-time }, note: { type: string } } } } } }
+        "202": { $ref: "#/components/responses/Job" }
+        "409": { $ref: "#/components/responses/Error" }
+  /trash:
+    get:
+      summary: Devices in Trash, with when each one is deleted for good
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { trash: { type: array, items: { type: object, properties: { name: { type: string }, label: { type: string }, android: { type: string }, deleted_at: { type: string, format: date-time }, purge_at: { type: string, format: date-time }, reason: { type: string, enum: [user, api, stopped, expired] }, ready: { type: boolean } } } } } } } } }
+  /trash/{name}/restore:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post:
+      summary: Bring a device back from Trash as a stopped device (start it when you need it)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { device: { type: string }, state: { type: string }, note: { type: string } } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /devices/{name}/start:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post: { summary: Start the device, responses: { "202": { $ref: "#/components/responses/Job" } } }
+  /devices/{name}/stop:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post: { summary: Stop the device (state is kept; a stopped device costs nothing), responses: { "202": { $ref: "#/components/responses/Job" } } }
+  /devices/{name}/restart:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post: { summary: Restart the device, responses: { "202": { $ref: "#/components/responses/Job" } } }
+  /devices/{name}/reset:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post: { summary: "Reset the device to a fresh state: apps and data are wiped, the phone comes back like new (same Android version, 1-5 min)", responses: { "202": { $ref: "#/components/responses/Job" } } }
+  /devices/{name}/screenshot:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    get:
+      summary: Screen as PNG; with w a smaller JPEG (cached up to 10 s - use /observe for a fresh frame)
+      parameters: [{ name: w, in: query, schema: { type: integer, minimum: 40, maximum: 540 } }]
+      responses:
+        "200": { description: Image, content: { image/png: {}, image/jpeg: {} } }
+  /devices/{name}/observe:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    get:
+      summary: A fresh look at the phone - screenshot, UI tree and the app on screen in one call
+      parameters:
+        - { name: w, in: query, description: image width in px (160-1080, default 540), schema: { type: integer } }
+        - { name: ui, in: query, description: 0 to skip the UI tree (faster), schema: { type: integer, enum: [0, 1] } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Observation" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /devices/{name}/action:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post:
+      summary: One action on the phone (no waiting)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Action" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, output: { type: string }, texts: { type: array, items: { type: string } }, packages: { type: array, items: { type: string } } } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /devices/{name}/act:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post:
+      summary: One action, then wait until the screen stops changing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/Action"
+                - type: object
+                  properties:
+                    settle: { type: boolean, description: wait for two identical frames in a row (up to 5 s) }
+                    seq: { type: integer, description: seq of the observation this action is based on }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  output: { type: string }
+                  seq: { type: integer, description: screen state after this action (pass it to the next act to chain without observing) }
+                  settled: { type: boolean, description: two identical frames that differ from the frame before the action, or no change for 3 s }
+                  changed: { type: boolean, description: false - the screen did not change at all (the action probably missed) }
+                  waited_ms: { type: integer }
+        "409":
+          description: The screen changed since the observation `seq` came from (another observe or act); nothing was done
+          content: { application/json: { schema: { type: object, properties: { error: { type: string, const: stale }, message: { type: string }, seq: { type: integer } } } } }
+  /devices/{name}/screenrecord:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    get:
+      summary: Record the screen for a few seconds
+      parameters:
+        - { name: seconds, in: query, description: "1-60, default 10", schema: { type: integer, minimum: 1, maximum: 60 } }
+      responses:
+        "200": { description: The recording, content: { video/mp4: { schema: { type: string, format: binary } } } }
+        "409": { description: Another recording is running on this phone }
+  /devices/{name}/op:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post:
+      summary: One low-level device primitive
+      description: >
+        op and args as in core/protocol.py; data has the protocol's result shape. shell {argv, timeout} → {rc, out_b64,
+        err_b64} runs argv as the phone's shell user and, like push, needs ADB access enabled for the device with the
+        caller's IP in allow_ips (403 otherwise; the key replaces the relay's login code); at most 4 shell/push at a time
+        per device (409 busy); commands that would reboot the device are refused; every command is logged. dump → {xml_z}; launch_app {package, activity},
+        start_activity {component}, force_stop {package} → {rc}; foreground → {package}; screenshot → {png_b64}; acquire,
+        screen → {w, h}; release, tap {x, y}, long_press {x, y, ms}, swipe {x1, y1, x2, y2, ms}, key {code, meta}, text
+        {value} (any language), clear_field → {}; ip_check → {ok, rotated, has_link, ip, country, city, timezone,
+        current_time, error}.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [op], properties: { op: { type: string, enum: [shell, dump, launch_app, start_activity, force_stop, foreground, screenshot, acquire, release, tap, long_press, swipe, key, text, clear_field, screen, ip_check] }, args: { type: object } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, data: { type: object } } } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "501": { $ref: "#/components/responses/Error" }
+  /devices/{name}/files:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    put:
+      summary: Put a file on the phone (push) - body is the file, path under /sdcard/ or /data/local/tmp/
+      parameters: [{ name: path, in: query, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, data: { type: object, properties: { rc: { type: integer }, err: { type: string }, bytes: { type: integer } } } } } } } }
+        "403": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+  /devices/{name}/media:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post:
+      summary: Media from the library on the phone as if shot with it (push), remove what we put (clean), or list it
+      description: push writes the file to /sdcard/<dir>/ under a gallery-style name of the phone's brand, re-encoded for this phone (EXIF make/model, capture time in the exit time zone, exit-city GPS when geo is true) and registers it in MediaStore. Media is uploaded from the dashboard (POST /api/media/upload) and referenced by id and owner.
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [action], properties: { action: { type: string, enum: [push, clean, list] }, id: { type: string }, owner: { type: string }, geo: { type: boolean, default: true }, unique: { type: boolean, default: true }, dir: { type: string, default: DCIM/Camera } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, path: { type: string }, name: { type: string }, kind: { type: string }, unique: { type: boolean }, geo: { type: boolean }, taken_at: { type: string }, make: { type: string }, model: { type: string }, removed: { type: integer }, pushed: { type: array, items: { type: object } } } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+  /devices/{name}/logs:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    get:
+      summary: Recent logcat lines
+      parameters: [{ name: lines, in: query, schema: { type: integer, maximum: 2000 } }]
+      responses: { "200": { description: OK } }
+  /devices/{name}/adb:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    get: { summary: ADB session status, responses: { "200": { description: OK } } }
+    post: { summary: Open an ADB session through the relay (code, IP allowlist, time limit), responses: { "200": { description: OK } } }
+    delete: { summary: Close the ADB session, responses: { "200": { description: OK } } }
+  /network/options:
+    get:
+      summary: What can be chosen when creating a device right now - exit types on sale, countries, plans (cached 60 s)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { types: { type: array, items: { type: string } }, countries: { type: array, items: { type: object, properties: { code: { type: string }, name: { type: string } } } }, plans: { type: array, items: { type: string } }, updated: { type: string, format: date-time } } } } } }
+  /proxies:
+    get:
+      summary: Proxies of the account - your own proxies and Clousd exits, and which devices use each
+      description: Same list as the dashboard's Network page. Addresses come without passwords.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { proxies: { type: array, items: { type: object } }, types_on_sale: { type: array, items: { type: string } } } } } } }
+    post:
+      summary: Add your own proxy (checked at once) or a Clousd exit of a country (paid per GB)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                proxy: { type: string, description: "host:port:user:pass, user:pass@host:port or socks5://user:pass@host:port" }
+                ip_type: { type: string, enum: [static, residential, mobile] }
+                rotate_url: { type: string, description: the provider's link that changes the IP (residential or mobile) }
+                type: { type: string, description: instead of proxy - a Clousd exit, one of GET /network/options types }
+                country: { type: string, example: US }
+                name: { type: string }
+                group: { type: string }
+      responses:
+        "200": { description: Added, content: { application/json: { schema: { type: object, properties: { proxy: { type: object }, check: { type: object } } } } } }
+  /proxies/{id}/bind:
+    post:
+      summary: Put devices on this proxy - time zone, locale and SIM follow the exit; stopped devices get it when they start
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { devices: { type: array, items: { type: string } } } } } } }
+      responses:
+        "200": { description: Per device - switching (with a job), saved (not running) or failed, content: { application/json: { schema: { type: object } } } }
+  /proxies/unbind:
+    post:
+      summary: Take devices off their proxy (a device without one has no internet until bound again)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { devices: { type: array, items: { type: string } } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /proxies/{id}/rotate:
+    post:
+      summary: New IP for every running device on the proxy - your proxy's rotation link, or a new session of a Clousd exit
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /proxies/{id}/check:
+    post:
+      summary: Check your own proxy - IP, country, ISP, latency
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /proxies/{id}:
+    delete:
+      summary: Delete a proxy no device uses
+      parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+      responses:
+        "200": { description: Deleted, content: { application/json: { schema: { type: object } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  /media:
+    get:
+      summary: The Library - photos, videos, documents and apps with their ids and folders
+      parameters: [{ name: kind, in: query, schema: { type: string, enum: [image, video, doc, apk] } }, { name: folder, in: query, schema: { type: integer } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+    post:
+      summary: Upload a file - multipart file= (photo 25 MB, video 200 MB, document 50 MB, apk 300 MB) or JSON {name, data_b64, folder} up to 50 MB
+      description: Pass the id in POST /runs files to put it on the phone for a task, or copy it to phones at once with /media/send. Every APK is checked on upload (a real Android app, 64-bit ARM code, no root or system-modification tools) and answers 422 apk_rejected with the reason otherwise.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data: { schema: { type: object, required: [file], properties: { file: { type: string, format: binary }, folder: { type: integer } } } }
+          application/json: { schema: { type: object, required: [name, data_b64], properties: { name: { type: string, example: beach.jpg }, data_b64: { type: string }, folder: { type: integer } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /apps:
+    get:
+      summary: Your apps - the APKs you uploaded (id, name, size, package, version); there is no catalog of other people's apps
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { apps: { type: array, items: { $ref: "#/components/schemas/App" } } } } } } }
+    post:
+      summary: Upload your APK once - multipart file=<app.apk> up to 300 MB (or JSON {name, data_b64} up to 50 MB); then install it by id on any of your phones
+      description: The file is checked before it is stored - a real Android app with a manifest, native code for arm64-v8a when it has any, not a root or system-modification tool, not a system package or system user id. A failed check answers 422 apk_rejected with the reason. Split bundles (.apks, .xapk) are not installed - upload the base .apk.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data: { schema: { type: object, required: [file], properties: { file: { type: string, format: binary } } } }
+          application/json: { schema: { type: object, required: [name, data_b64], properties: { name: { type: string, example: my-app.apk }, data_b64: { type: string } } } }
+      responses:
+        "200": { description: Stored, content: { application/json: { schema: { type: object, properties: { app: { $ref: "#/components/schemas/App" } } } } } }
+        "402": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /apps/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+    get:
+      summary: One of your apps
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { app: { $ref: "#/components/schemas/App" } } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Delete the APK from your storage (phones keep what is installed)
+      responses:
+        "200": { description: Deleted, content: { application/json: { schema: { type: object } } } }
+  /apps/{id}/install:
+    parameters: [{ name: id, in: path, required: true, schema: { type: integer } }]
+    post:
+      summary: Install your app on running phones - {devices:[…]}; each install runs as a job on its phone
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [devices], properties: { devices: { type: array, items: { type: string }, example: ["Phone #1", "Phone #2"] } } } } } }
+      responses:
+        "200": { description: Started, content: { application/json: { schema: { type: object, properties: { installs: { type: object, description: "per phone - {ok, job} or {ok:false, message}" } } } } } }
+        "404": { $ref: "#/components/responses/Error" }
+  /media/folders:
+    post:
+      summary: Create a Library folder - {name}
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string, maxLength: 40 } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /media/move:
+    post:
+      summary: Move Library files into a folder - {ids, folder} (folder 0 = none)
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { ids: { type: array, items: { type: integer } }, folder: { type: integer } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /media/send:
+    post:
+      summary: Copy Library files to phones now - photos and videos into the gallery as if taken there, documents into Downloads, apks installed
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { ids: { type: array, items: { type: integer } }, devices: { type: array, items: { type: string } } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object } } } }
+  /devices/{name}/label:
+    post:
+      summary: Give a phone a name people and agents can tell apart ("Anna IG"); empty = back to "Model #N"
+      parameters: [{ $ref: "#/components/parameters/name" }]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { label: { type: string, maxLength: 40 } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { label: { type: string }, own_label: { type: [string, "null"] } } } } } }
+  /balance:
+    get:
+      summary: The account's money - balance, spend per day, hours left, renewals and warnings to show the user
+      description: >-
+        spend_per_day = running per-minute phones (hourly price up to the daily cap) + paid proxy traffic of the last 24 hours;
+        runs_out_in_hours = balance / spend; warnings are ready sentences (hours left, traffic cost, monthly renewals above the
+        balance, below the minimum to start). Check it before starting phones or long runs.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { balance: { type: string }, balance_cents: { type: integer }, spend_per_day: { type: string }, runs_out_in_hours: { type: [number, "null"] }, warnings: { type: array, items: { type: string } }, top_up: { type: string } } } } } }
+  /jobs/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    get:
+      summary: State of a long operation
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { job: { $ref: "#/components/schemas/Job" } } } } } }
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+  parameters:
+    name: { name: name, in: path, required: true, schema: { type: string } }
+  responses:
+    Error:
+      description: Error
+      content: { application/json: { schema: { type: object, properties: { error: { type: string }, message: { type: string } } } } }
+    Job:
+      description: Started
+      content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, job: { $ref: "#/components/schemas/Job" } } } } }
+  schemas:
+    App:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string, example: my-app.apk }
+        size: { type: string, example: 14.0 MB }
+        package: { type: string, example: com.example.app }
+        version: { type: string, example: 2.4.1 }
+        created: { type: string, format: date-time }
+    Error:
+      type: object
+      properties:
+        ok: { type: boolean, const: false }
+        error: { type: string }
+        message: { type: string }
+    Device:
+      type: object
+      properties:
+        name: { type: string }
+        label: { type: string, example: "Phone #3", description: 'the name shown in the dashboard; "Phone #N" unless renamed' }
+        number: { type: integer, example: 3 }
+        android: { type: string, example: "14" }
+        state: { type: string, enum: [running, stopped, starting, error] }
+    Run:
+      type: object
+      properties:
+        id: { type: string }
+        device: { type: string }
+        devices: { type: array, items: { type: string }, description: a parent run on several phones }
+        children: { type: array, items: { type: string } }
+        parent: { type: string }
+        task: { type: string }
+        status: { type: string, enum: [queued, created, running, paused, cancelling, completed, failed, cancelled] }
+        succeeded: { type: boolean }
+        answer: { type: string }
+        error: { type: string }
+        structured_output: { type: object }
+        card: { type: object, properties: { id: { type: string }, kind: { type: string, enum: [question, permission] }, question: { type: string }, options: { type: array, items: { type: string } }, action: { type: string } } }
+        steps: { type: integer }
+        seconds: { type: integer }
+        created: { type: string, format: date-time }
+        done: { type: string, format: date-time }
+    Job:
+      type: object
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        phone: { type: string }
+        state: { type: string, enum: [running, done, failed] }
+        started: { type: string, format: date-time }
+        done: { type: string, format: date-time }
+        output: { type: string }
+    Action:
+      type: object
+      required: [op]
+      properties:
+        op:
+          type: string
+          enum: [tap, long_press, swipe, scroll, text, key, open_app, close_app, url, intent, settings, screen_text, find_text, tap_text, wait_text,
+                 installed, clipboard_get, clipboard_set, notifications, notifications_open, notifications_close, notifications_clear, app_info, crashes, health]
+          description: >-
+            Read-only ops (installed, screen_text, find_text, wait_text, clipboard_get, notifications, app_info, crashes, health) do not
+            change the observation seq. clipboard_get, notifications, app_info, crashes and health return their result as JSON in `data`.
+        x: { type: integer, description: phone pixels }
+        y: { type: integer }
+        x2: { type: integer }
+        y2: { type: integer }
+        ms: { type: integer, description: swipe duration; for wait_text the timeout in ms (max 120000) }
+        text: { type: string, description: "text to type (any language), text to find, scroll direction (down|up)" }
+        key: { type: string, description: "home, back, recents, enter, power, tab, del, menu, volume_up, volume_down, wake, sleep or a keycode" }
+        package: { type: string }
+        url: { type: string }
+        fx: { type: number, description: "x as a fraction of the screen width (0..1) instead of pixels (tap, swipe, long_press)" }
+        fy: { type: number }
+        intent:
+          type: object
+          description: for op=intent - started like `am start` from the shell user
+          properties:
+            action: { type: string, example: "android.intent.action.VIEW" }
+            data: { type: string, description: "a URI, e.g. https://example.com or geo:0,0?q=coffee" }
+            package: { type: string }
+            component: { type: string, example: "com.android.settings/.Settings" }
+            type: { type: string, description: MIME type }
+            extras: { type: object, additionalProperties: { type: string }, description: string extras }
+    UINode:
+      type: object
+      properties:
+        text: { type: string }
+        desc: { type: string }
+        id: { type: string }
+        class: { type: string }
+        pkg: { type: string }
+        b: { type: array, items: { type: integer }, minItems: 4, maxItems: 4, description: "x1, y1, x2, y2 in phone pixels" }
+        click: { type: boolean }
+        long: { type: boolean }
+        scroll: { type: boolean }
+        focus: { type: boolean }
+        focused: { type: boolean }
+        checked: { type: boolean }
+        disabled: { type: boolean }
+        password: { type: boolean }
+        selected: { type: boolean }
+    Observation:
+      type: object
+      properties:
+        seq: { type: integer }
+        ts: { type: string, format: date-time }
+        ms: { type: integer, description: time the observation took }
+        screen: { type: object, properties: { w: { type: integer }, h: { type: integer } } }
+        image: { type: object, properties: { w: { type: integer }, h: { type: integer }, format: { type: string }, data: { type: string, contentEncoding: base64 } } }
+        package: { type: string }
+        activity: { type: string }
+        ui: { type: array, items: { $ref: "#/components/schemas/UINode" } }
+        ui_error: { type: string, description: "set when the UI tree is not available yet (prefix not_ready)" }

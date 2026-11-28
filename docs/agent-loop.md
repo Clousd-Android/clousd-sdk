@@ -1,0 +1,117 @@
+# How an AI agent drives an Android phone
+
+Notes from running agents on Clousd phones: what the loop looks like, where it breaks, and what fixed it. The API
+calls below are the public ones in [`openapi.yaml`](../openapi.yaml); the Python names are from the
+[`clousd`](../python) client.
+
+## The loop
+
+Every step is the same three calls:
+
+1. **Observe**: `GET /devices/{name}/observe?w=540` returns a fresh screenshot, the foreground package and activity,
+   the UI tree (every node with text, description, resource id, bounds and whether it is clickable or scrollable)
+   and a sequence number `seq`.
+2. **Act**: `POST /devices/{name}/act` with one operation and the `seq` from the observation. If anything observed or
+   acted on the phone after that `seq`, the server answers `409 stale` and does nothing: the action was decided on a
+   screen that no longer exists.
+3. **Verify**: the next observation. `settle: true` on the act call makes the server wait until two consecutive
+   frames are identical (up to five seconds), so the next observation shows the result of the action, not the
+   animation.
+
+```python
+phone = Clousd().device("dev_04f2")
+obs = phone.observe(width=540)
+while not done(obs):
+    step = model(obs["image"], obs["ui"])          # your policy
+    phone.act(step["op"], seq=obs["seq"], settle=True, **step["args"])
+    obs = phone.observe(width=540)
+```
+
+## A ready-made loop
+
+`clousd.agent` is this loop with a language model as the policy: any OpenAI-compatible chat endpoint (llama.cpp,
+vLLM, Ollama or a hosted API). Each step the model gets the screenshot with a number drawn on every labelled or
+tappable element, the same elements as text lines (`[12] 'About phone' (TextView) tap`) and the steps so far, and
+answers with one tool call: `tap {element: 12}`, `type`, `key`, `scroll`, `swipe`, `open_app`, `open_url`,
+`wait`, `done`, `fail`.
+
+```bash
+clousd run "Open Settings and tell me which Android version this phone runs" \
+    --device dev_04f2 --model-url http://127.0.0.1:8080/v1 --trace run.jsonl
+```
+
+Guards that came out of watching an open-weights 27B vision model drive phones:
+
+- **Typing with nothing focused** is refused with "tap the field first (for web addresses use open_url)". Models
+  like to type a URL into whatever screen is open.
+- **Waiting** is allowed twice in a row; the third wait is refused. Without that a model can wait on a static screen
+  until it runs out of steps.
+- **Repeating** the same call three times adds "it is not working, try something different" to the result the model
+  sees next.
+- **409 stale** is not an error: the loop just looks again.
+
+`clousd bench` runs a dozen everyday tasks (Settings questions, a web page heading, a Chrome search, dark theme,
+a contact, an alarm, brightness) with automatic checks - from the answer, the final screen, or, when ADB access is
+enabled for the device, the phone's own state (`settings get`, content providers). It is a quick way to compare models
+or prompts on the same phone.
+
+## Give the model text, not only pixels
+
+A screenshot alone makes the model guess coordinates. The UI tree gives it the texts and the bounds of every
+element, so most actions become `tap_text("Add to cart")` instead of `tap(541, 1702)`. `tap_text` is exact match
+by default, because substring matching taps the wrong thing more often than people expect: "Delete" matches the
+title "Delete post?", "Profile" matches "Profile picture".
+
+When a screen has no accessibility nodes (games, some video players, custom-drawn editors) the tree comes back
+empty and `ui_error` says why. That is the signal to fall back to coordinates from the image, not a transient
+error to retry.
+
+## Reset between runs
+
+An evaluation is only comparable when every episode starts from the same state. Reset the phone before each run:
+
+```python
+phone.reset()                  # apps and data wiped, same Android version; 1-5 minutes
+```
+
+Reset returns a job; the client waits for it by default. The phone comes back booted and clean, as a new phone
+with the same Android version. Install the apps the episode needs and sign in as part of the run, or keep a separate phone per setup.
+
+## Things that cost us the most time
+
+**Acting on a stale screen.** Before `seq` existed, agents tapped buttons that had already moved. A dialog appears
+200 ms after the observation, the tap lands on it, the run is ruined and nobody notices until the end. `seq` turns
+that into an explicit `409` the agent can handle by observing again.
+
+**Not waiting for the UI to settle.** Android animates almost every transition. An observation taken 100 ms after a
+tap shows a half-drawn screen; the model reads the old texts and acts twice. `settle: true` costs 0.3 to 1 s and
+removes most "the agent pressed it twice" failures. Live video and camera previews never settle; the response says
+`settled: false` and you decide.
+
+**Pixel coordinates from a scaled image.** The model sees a 540 px wide screenshot; the phone is 1080 px wide. The MCP
+server scales taps for you; with the raw API, scale by `screen.w / image.w` or use the bounds from the UI tree,
+which are always in device pixels.
+
+**Typing with key events.** Typing character by character through key codes breaks on non-Latin text and on
+password fields. `text` sends the whole string through the input method, works in any language and in password
+fields.
+
+**Rate limits as errors.** The API allows 120 requests a minute per phone. An agent polling `observe` in a tight loop
+hits `429` within a minute. Observe once per step, use `settle` instead of polling, and let the client honour
+`Retry-After`.
+
+**Checking the result with another screenshot.** `wait_text("Added", timeout=30)` is cheaper and more reliable than
+screenshot-compare-screenshot: it polls the UI tree on the server and returns as soon as the text appears.
+
+## What the phone is
+
+A Clousd phone is a full Android system in the cloud with its own network exit; the time zone and locale follow the
+country of that exit, so the agent sees the screens a person in that country would. These are cloud phones, not
+physical handsets: apps that verify the device with Google's device checks may not pass them, and no device
+certification is claimed.
+
+## Where the logs are
+
+Everything the phone writes to logcat is kept on the server and available through `GET /devices/{name}/logs` and in
+the dashboard. When a run fails for no visible reason, the log usually has the answer: an app that crashed, a
+permission dialog that was dismissed, a network timeout.
