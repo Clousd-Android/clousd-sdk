@@ -88,6 +88,8 @@ class Fake(BaseHTTPRequestHandler):
             if body["op"] == "screen_text":
                 return self._send(200, {"ok": True, "texts": ["Settings", "Wi-Fi"]})
             return self._send(200, {"ok": True, "output": "done " + body["op"]})
+        if p == "/v1/devices":
+            return self._send(202, {"ok": True, "name": "t1", "kind": body.get("kind", "cloud"), "state": "starting"})
         if p == "/v1/devices/t1/act":
             return self._send(200, {"ok": True, "output": "", "seq": 7, "stale": body.get("seq", 7) != 7,
                                     "settled": True, "waited_ms": 600})
@@ -116,6 +118,20 @@ class ClientTest(unittest.TestCase):
         self.assertEqual([d.name for d in ds], ["t1"])
         self.assertEqual(Fake.calls[-1][3], "Bearer cl_live_test")
         self.assertNotIn("cl_live_test", repr(self.c))
+
+    def test_create_physical(self):
+        d = self.c.create_device(kind="physical", country="us", label="Rack", wait=False)
+        method, path, body, _ = Fake.calls[-1]
+        self.assertEqual((method, path), ("POST", "/v1/devices"))
+        self.assertEqual({k: body[k] for k in ("kind", "country", "label")}, {"kind": "physical", "country": "US", "label": "Rack"})
+        self.assertNotIn("android", body)
+        self.assertTrue(body["idempotency_key"])
+        self.assertEqual(d.kind, "physical")
+        with self.assertRaises(ValueError):
+            self.c.create_device(kind="physical", wait=False)
+        with self.assertRaises(ValueError):
+            self.c.create_device(kind="tablet", wait=False)
+        self.assertEqual(self.c.devices()[0].kind, "cloud")
 
     def test_actions_shape(self):
         d = self.c.device("t1")

@@ -106,7 +106,7 @@ screenshot-compare-screenshot: it polls the UI tree on the server and returns as
 ## What the phone is
 
 A Clousd phone is a full Android system in the cloud with its own network exit; the time zone and locale follow the
-country of that exit, so the agent sees the screens a person in that country would. These are cloud phones, not
+country of that exit, so the agent sees the screens a person in that country would. Cloud phones are not
 physical handsets: apps that verify the device with Google's device checks may not pass them, and no device
 certification is claimed.
 

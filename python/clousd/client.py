@@ -114,13 +114,32 @@ class Clousd:
 
     def create_device(self, android: str = "14", network: Optional[Dict[str, Any]] = None, plan: str = "metered",
                       idempotency_key: Optional[str] = None, region: Optional[str] = None, burner: bool = False,
-                      label: str = "", wait: bool = True, timeout: float = 600) -> "Device":
+                      label: str = "", wait: bool = True, timeout: float = 600, kind: str = "cloud",
+                      country: Optional[str] = None) -> "Device":
         """Create one device on this account (creating is free; it runs pay as you go by the minute from the balance,
         paid exits metered per GB). `android` - a version from android_versions(), e.g. "14". `network` like {"type": "residential", "country": "US"} or {"type": "byo", "url": "socks5://…"} (none = a Clousd
         residential exit in the account's country);
         `label` - the name in the dashboard (empty = "Phone #N"); `idempotency_key` - a retry with the same key within
-        10 minutes is not charged twice (one is generated if not given). With wait=True returns once the device is running."""
+        10 minutes is not charged twice (one is generated if not given). With wait=True returns once the device is running.
+        kind="physical" rents a physical phone instead, where the account has them: pass `country` (ISO-2, the country of
+        its internet); the price of the period is charged from the balance at once and `android` is not chosen."""
         import uuid
+        if kind == "physical":
+            cc = str(country or region or "").strip().upper()
+            if len(cc) != 2 or not cc.isalpha():
+                raise ValueError("country: two letters such as \"US\" for kind=\"physical\"")
+            body = {"kind": "physical", "country": cc, "idempotency_key": idempotency_key or uuid.uuid4().hex}
+            if label:
+                body["label"] = label
+            r = self.request("POST", "devices", json=body, timeout=120)
+            d = Device(self, r["name"], {"name": r["name"], "state": r.get("state", "starting"), "kind": "physical"})
+            if wait:
+                end = time.time() + timeout
+                while d.refresh().get("state") in ("starting", "") and time.time() < end:
+                    time.sleep(5)
+            return d
+        if kind not in ("cloud", ""):
+            raise ValueError(f"kind: \"cloud\" or \"physical\", got {kind!r}")
         body: Dict[str, Any] = {"plan": plan, "burner": burner, "idempotency_key": idempotency_key or uuid.uuid4().hex}
         if network:
             body["network"] = network
@@ -556,6 +575,12 @@ class Device:
     def refresh(self) -> Dict[str, Any]:
         self.data = self.client.request("GET", self._p()).get("device", {})
         return self.data
+
+    @property
+    def kind(self) -> str:
+        """"cloud" or "physical". A physical phone stays on: stop, reset, ADB and own app files do not apply to it,
+        and delete() returns it (everything on it is erased)."""
+        return str(self.data.get("kind") or "cloud")
 
     @property
     def state(self) -> str:
