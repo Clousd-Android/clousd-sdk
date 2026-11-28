@@ -578,8 +578,9 @@ class Device:
 
     @property
     def kind(self) -> str:
-        """"cloud" or "physical". A physical phone stays on: stop, reset, ADB and own app files do not apply to it,
-        and delete() returns it (everything on it is erased)."""
+        """"cloud" or "physical". A physical phone stays on: stop() and ADB do not apply to it, reset() erases everything
+        on it and keeps the rental, set_network("residential", country=...) changes its internet, and delete() returns it (everything on it is
+        erased)."""
         return str(self.data.get("kind") or "cloud")
 
     @property

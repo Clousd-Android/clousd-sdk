@@ -89,7 +89,8 @@ phone.act("tap", seq=obs["seq"], x=540, y=1200, settle=True)
 
 A device has a `kind`: `"cloud"` or `"physical"`. Where the account has physical phones,
 `c.create_device(kind="physical", country="US")` rents one for a period from the balance. A physical phone stays on
-(no `stop()`, `reset()`, ADB or own app files), and `delete()` returns it and erases everything on it.
+(no `stop()` or ADB); `reset()` erases everything on it and keeps the rental, and `delete()` returns it and erases
+everything on it.
 
 Coordinates are device pixels (`size()` gives the screen). Long device operations return a `Job`; they wait by default,
 pass `wait=False` to poll yourself. Errors raise `ClousdError` with the HTTP status, a short code and a message. The API

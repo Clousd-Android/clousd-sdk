@@ -225,8 +225,9 @@ def devices(op: Annotated[str, Field(description="list (default) | start | stop 
     """Phones this key can use.
     op=list: name, label (the name people see in the dashboard, e.g. "Phone #3"), number, state (running / stopped /
     starting), Android version and network exit, and kind: cloud or physical. Every tool takes the name, the label or
-    the number. A physical phone (kind physical) stays on: start, stop, restart and reset do not apply to it, and
-    op=delete returns it and erases everything on it at once, with no Trash - ask the user first.
+    the number. A physical phone (kind physical) stays on: start, stop and restart do not apply to it; op=reset
+    erases everything on it and keeps the rental; op=delete returns it and erases everything on it at once, with no Trash -
+    ask the user first.
     op=start / op=stop / op=restart with device: start a stopped phone (one to three minutes until it has booted), stop one
     (it keeps its apps and data) or restart it. op=reset with device: back to a fresh state - apps and data wiped, same
     Android version; works whether the phone runs or is stopped. Ask the user before reset.

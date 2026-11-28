@@ -12,8 +12,10 @@ info:
     job; poll /jobs/{id}. Errors are JSON: {"error": "...", "message": "..."}.
     A device has a kind: cloud (a cloud Android phone, everything below applies) or physical (a physical phone rented for
     a period, where the account has them). On a physical phone list, screenshot, observe, act, action, runs, label and
-    DELETE (returns the phone) work the same; stop, reset, apk, adb, files, media, network changes and stream answer
-    409 not_supported.
+    DELETE (returns the phone) work the same. reset erases everything on the phone and keeps the rental; files from the
+    Library are sent to it like to any device (POST /media/send); POST /devices/{name}/network changes its internet.
+    stop, adb and stream answer 409 not_supported; your own APK files install only where that is enabled for the phone
+    (apk_install in the device), otherwise 409 apk_off.
 servers:
   - url: https://api.clousd.com/v1
 security:
@@ -265,6 +267,16 @@ paths:
   /devices/{name}/reset:
     parameters: [{ $ref: "#/components/parameters/name" }]
     post: { summary: "Reset the device to a fresh state: apps and data are wiped, the phone comes back like new (same Android version, 1-5 min)", responses: { "202": { $ref: "#/components/responses/Job" } } }
+  /devices/{name}/network:
+    parameters: [{ $ref: "#/components/parameters/name" }]
+    post:
+      summary: "Physical phone: change its internet - {country} moves it to another country, {proxy_id} uses your own SOCKS5 proxy, an empty body gives a new IP"
+      description: Once a minute per phone. The time zone and language of the phone follow the new exit. For a cloud phone bind a proxy instead (POST /proxies/{id}/bind).
+      requestBody: { content: { application/json: { schema: { type: object, properties: { country: { type: string, example: "DE" }, proxy_id: { type: integer } } } } } }
+      responses:
+        "200": { description: Accepted - the phone is back online in about a minute }
+        "400": { description: bad_country | no_proxy | proxy_proto (a physical phone needs SOCKS5) | not_physical }
+        "409": { description: too_soon | no_exit | paused }
   /devices/{name}/screenshot:
     parameters: [{ $ref: "#/components/parameters/name" }]
     get:
@@ -567,7 +579,8 @@ components:
       type: object
       properties:
         name: { type: string }
-        kind: { type: string, enum: [cloud, physical], description: "cloud - a cloud Android phone; physical - a rented physical phone (always on: no stop, reset, apk, adb)" }
+        kind: { type: string, enum: [cloud, physical], description: "cloud - a cloud Android phone; physical - a rented physical phone (always on: no stop, no adb)" }
+        apk_install: { type: boolean, description: "kind physical: your own APK files from the Library can be installed on this phone" }
         label: { type: string, example: "Phone #3", description: 'the name shown in the dashboard; "Phone #N" unless renamed' }
         number: { type: integer, example: 3 }
         android: { type: string, example: "14" }

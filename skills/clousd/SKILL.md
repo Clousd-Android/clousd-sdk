@@ -31,8 +31,9 @@ in the URL. Never print the key back in full, never store it in a project file.
    (one to three minutes). `devices op=reset` returns a phone to a fresh state (apps and data wiped, same Android
    version) - ask the user first. `devices op=delete` moves a phone to Trash for 14 days (stopped, not billed, data kept;
    `op=trash` lists it, `op=restore` brings it back stopped); `forever=true` wipes it at once and cannot be undone - only
-   when the user says so explicitly. A phone with `kind: physical` is a rented physical phone: it stays on (no start,
-   stop or reset), and `op=delete` returns it and erases everything on it at once, with no Trash - ask the user first.
+   when the user says so explicitly. A phone with `kind: physical` is a rented physical phone: it stays on (no start
+   or stop), `op=reset` erases everything on it and keeps the rental, and `op=delete` returns it and erases everything on it
+   at once, with no Trash - ask the user first.
 3. **Give the phone the goal, not the taps.** `run task="..." devices=...` - Clousd's agent works the screen and
    finishes with an answer. Write the task like you would for a person: what to open, what to do, what to report back.
    Pass `output_schema` when you need the answer as JSON.
