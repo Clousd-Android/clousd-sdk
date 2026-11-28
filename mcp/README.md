@@ -48,8 +48,8 @@ Docs: [clousd.com/docs/mcp](https://clousd.com/docs/mcp/). Source: [github.com/C
 claude mcp add --transport http clousd https://api.clousd.com/mcp --header "Authorization: Bearer cl_live_..."
 ```
 
-The key goes only in the `Authorization` header: a key in the address is refused (addresses end up in logs and
-histories). Without a header the server answers `401` with the OAuth metadata, which is how connector apps start the
+The key goes only in a header - `Authorization: Bearer cl_live_...`, or `X-API-Key: cl_live_...` for clients that keep
+`Authorization` for their own sign-in. A key in the address is refused (addresses end up in logs and histories). Without a header the server answers `401` with the OAuth metadata, which is how connector apps start the
 sign-in.
 
 ### Local (stdio)

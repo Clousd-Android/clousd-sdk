@@ -70,7 +70,7 @@ Device_ = Annotated[str, Field(description="Device from devices: its name, its l
 
 def _use(ctx: Optional[Context]) -> None:
     """Remember which API key this request carries. Over HTTP (api.clousd.com/mcp) only the header counts:
-    `Authorization: Bearer <cl_live_… key or OAuth token>` - keys in the address are refused (they end up in logs and
+    `Authorization: Bearer <cl_live_… key or OAuth token>`, or `X-API-Key: cl_live_…` - keys in the address are refused (they end up in logs and
     histories). Over stdio there is no request and the key is CLOUSD_API_KEY from the environment."""
     key = ""
     try:
@@ -85,6 +85,8 @@ def _use(ctx: Optional[Context]) -> None:
             auth = h.get("authorization", "") or h.get("Authorization", "")
             if auth.lower().startswith("bearer "):
                 key = auth[7:].strip()
+            else:   # clients and directories that cannot set Authorization (it is reserved for their OAuth) send X-API-Key
+                key = (h.get("x-api-key", "") or h.get("X-API-Key", "")).strip()
     except Exception:
         key = ""
     _key.set(key)
@@ -709,7 +711,7 @@ def schedules(op: Annotated[str, Field(description="list (default) | add | run |
 # ---- serving ----------------------------------------------------------------------------------------------------
 
 class _BearerGate:
-    """Remote server: a request without `Authorization: Bearer …` gets 401 with the OAuth resource metadata (RFC 9728),
+    """Remote server: a request without `Authorization: Bearer …` (or an `X-API-Key` header) gets 401 with the OAuth resource metadata (RFC 9728),
     so connectors (Claude.ai, ChatGPT…) start the sign-in; a key in the address gets a plain refusal."""
 
     def __init__(self, app: Any):
@@ -718,7 +720,7 @@ class _BearerGate:
     async def __call__(self, scope: Dict[str, Any], receive: Any, send: Any) -> None:
         if scope.get("type") == "http" and scope.get("method") != "OPTIONS":
             hdrs = {k.lower(): v for k, v in scope.get("headers") or []}
-            if not hdrs.get(b"authorization", b"").lower().startswith(b"bearer "):
+            if not hdrs.get(b"authorization", b"").lower().startswith(b"bearer ") and not hdrs.get(b"x-api-key", b"").strip():
                 qs = (scope.get("query_string") or b"").lower()
                 in_url = any(p in qs for p in (b"api_key", b"apikey", b"clousdapikey", b"config=", b"key="))
                 msg = ("keys in the address are not accepted - send Authorization: Bearer cl_live_…" if in_url
