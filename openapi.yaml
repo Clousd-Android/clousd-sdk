@@ -270,13 +270,13 @@ paths:
   /devices/{name}/network:
     parameters: [{ $ref: "#/components/parameters/name" }]
     post:
-      summary: "Physical phone: change its internet - {country} moves it to another country, {proxy_id} uses your own SOCKS5 proxy, an empty body gives a new IP"
-      description: Once a minute per phone. The time zone and language of the phone follow the new exit. For a cloud phone bind a proxy instead (POST /proxies/{id}/bind).
-      requestBody: { content: { application/json: { schema: { type: object, properties: { country: { type: string, example: "DE" }, proxy_id: { type: integer } } } } } }
+      summary: "Physical phone: change its internet - {country} moves it to another country, an empty body gives a new IP"
+      description: Once a minute per phone. The time zone and language of the phone follow the new exit. A physical phone connects through Clousd Network only - your own proxy cannot be used on it. For a cloud phone bind a proxy instead (POST /proxies/{id}/bind).
+      requestBody: { content: { application/json: { schema: { type: object, properties: { country: { type: string, example: "DE" } } } } } }
       responses:
         "200": { description: Accepted - the phone is back online in about a minute }
-        "400": { description: bad_country | no_proxy | proxy_proto (a physical phone needs SOCKS5) | not_physical }
-        "409": { description: too_soon | no_exit | paused }
+        "400": { description: bad_country | not_physical }
+        "409": { description: too_soon | no_exit | paused | not_supported (own proxy) }
   /devices/{name}/screenshot:
     parameters: [{ $ref: "#/components/parameters/name" }]
     get:
